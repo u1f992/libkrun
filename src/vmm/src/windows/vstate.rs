@@ -167,6 +167,11 @@ impl SafePartition {
             .map_err(Error::CreatePartition)?;
         Ok(SafePartition { partition: handle })
     }
+
+    /// Returns the raw partition handle for use with WHPX APIs.
+    pub(crate) fn handle(&self) -> WHV_PARTITION_HANDLE {
+        self.partition
+    }
 }
 
 impl Drop for SafePartition {
@@ -466,6 +471,11 @@ impl Vm {
     /// vCPUs need this to issue register get/set and run calls.
     pub(crate) fn partition(&self) -> &Arc<SafePartition> {
         &self.partition
+    }
+
+    /// Returns the raw WHPX partition handle for use with interrupt delivery, etc.
+    pub fn partition_handle(&self) -> WHV_PARTITION_HANDLE {
+        self.partition.handle()
     }
 
     /// Maps all regions of `guest_mem` into the partition's GPA space.
