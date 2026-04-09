@@ -1,13 +1,21 @@
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
+#[cfg(unix)]
 use polly::event_manager::{EventManager, Subscriber};
+#[cfg(unix)]
 use utils::epoll::{EpollEvent, EventSet};
 
+#[cfg(unix)]
 use super::device::Console;
+#[cfg(unix)]
 use crate::virtio::console::device::{CONTROL_RXQ_INDEX, CONTROL_TXQ_INDEX};
+#[cfg(unix)]
 use crate::virtio::console::port_queue_mapping::{queue_idx_to_port_id, QueueDirection};
+#[cfg(unix)]
 use crate::virtio::device::VirtioDevice;
 
+#[cfg(unix)]
 impl Console {
     pub(crate) fn read_queue_event(&self, queue_index: usize, event: &EpollEvent) -> bool {
         log::trace!("Event on queue {queue_index}: {:?}", event.event_set());
@@ -108,6 +116,7 @@ impl Console {
     }
 }
 
+#[cfg(unix)]
 impl Subscriber for Console {
     fn process(&mut self, event: &EpollEvent, event_manager: &mut EventManager) {
         let source = event.fd();

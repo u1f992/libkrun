@@ -1,13 +1,19 @@
+#[cfg(unix)]
 use libc::{
     fcntl, F_GETFL, F_SETFL, O_NONBLOCK, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO, TIOCGWINSZ,
 };
 use log::Level;
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::ioctl_read_bad;
+#[cfg(unix)]
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+#[cfg(unix)]
 use nix::unistd::{dup, isatty};
 use std::fs::File;
 use std::io::{self, ErrorKind};
+#[cfg(unix)]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use utils::eventfd::EventFd;
 use utils::eventfd::EFD_NONBLOCK;
@@ -31,26 +37,31 @@ pub trait PortTerminalProperties: Send + Sync {
     fn get_win_size(&self) -> (u16, u16);
 }
 
+#[cfg(unix)]
 pub fn stdin() -> Result<Box<dyn PortInput + Send>, nix::Error> {
     let fd = dup_raw_fd_into_owned(STDIN_FILENO)?;
     make_non_blocking(&fd)?;
     Ok(Box::new(PortInputFd(fd)))
 }
 
+#[cfg(unix)]
 pub fn input_to_raw_fd_dup(fd: RawFd) -> Result<Box<dyn PortInput + Send>, nix::Error> {
     let fd = dup_raw_fd_into_owned(fd)?;
     make_non_blocking(&fd)?;
     Ok(Box::new(PortInputFd(fd)))
 }
 
+#[cfg(unix)]
 pub fn stdout() -> Result<Box<dyn PortOutput + Send>, nix::Error> {
     output_to_raw_fd_dup(STDOUT_FILENO)
 }
 
+#[cfg(unix)]
 pub fn stderr() -> Result<Box<dyn PortOutput + Send>, nix::Error> {
     output_to_raw_fd_dup(STDERR_FILENO)
 }
 
+#[cfg(unix)]
 pub fn term_fd(
     term_fd: RawFd,
 ) -> Result<Box<dyn PortTerminalProperties + Send + Sync>, nix::Error> {
@@ -66,14 +77,17 @@ pub fn term_fixed_size(width: u16, height: u16) -> Box<dyn PortTerminalPropertie
     Box::new(PortTerminalPropertiesFixed((width, height)))
 }
 
+#[cfg(unix)]
 pub fn input_empty() -> Result<Box<dyn PortInput + Send>, nix::Error> {
     Ok(Box::new(PortInputEmpty {}))
 }
 
+#[cfg(unix)]
 pub fn output_file(file: File) -> Result<Box<dyn PortOutput + Send>, nix::Error> {
     output_to_raw_fd_dup(file.as_raw_fd())
 }
 
+#[cfg(unix)]
 pub fn output_to_raw_fd_dup(fd: RawFd) -> Result<Box<dyn PortOutput + Send>, nix::Error> {
     let fd = dup_raw_fd_into_owned(fd)?;
     make_non_blocking(&fd)?;
@@ -84,14 +98,17 @@ pub fn output_to_log_as_err() -> Box<dyn PortOutput + Send> {
     Box::new(PortOutputLog::new())
 }
 
+#[cfg(unix)]
 struct PortInputFd(OwnedFd);
 
+#[cfg(unix)]
 impl AsRawFd for PortInputFd {
     fn as_raw_fd(&self) -> RawFd {
         self.0.as_raw_fd()
     }
 }
 
+#[cfg(unix)]
 impl PortInput for PortInputFd {
     fn read_volatile(&mut self, buf: &mut VolatileSlice) -> io::Result<usize> {
         // This source code is copied from vm-memory, except it fixes an issue, where
@@ -134,14 +151,17 @@ impl PortInput for PortInputFd {
     }
 }
 
+#[cfg(unix)]
 struct PortOutputFd(OwnedFd);
 
+#[cfg(unix)]
 impl AsRawFd for PortOutputFd {
     fn as_raw_fd(&self) -> RawFd {
         self.0.as_raw_fd()
     }
 }
 
+#[cfg(unix)]
 impl PortOutput for PortOutputFd {
     fn write_volatile(&mut self, buf: &VolatileSlice) -> Result<usize, io::Error> {
         self.0.write_volatile(buf).map_err(|e| match e {
@@ -159,6 +179,7 @@ impl PortOutput for PortOutputFd {
     }
 }
 
+#[cfg(unix)]
 fn dup_raw_fd_into_owned(raw_fd: RawFd) -> Result<OwnedFd, nix::Error> {
     // SAFETY: if raw_fd is invalid the `dup` call below will fail
     let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
@@ -166,6 +187,7 @@ fn dup_raw_fd_into_owned(raw_fd: RawFd) -> Result<OwnedFd, nix::Error> {
     Ok(fd)
 }
 
+#[cfg(unix)]
 fn make_non_blocking(as_rw_fd: &impl AsRawFd) -> Result<(), nix::Error> {
     let fd = as_rw_fd.as_raw_fd();
     unsafe {
@@ -224,10 +246,12 @@ impl PortOutput for PortOutputLog {
     fn wait_until_writable(&self) {}
 }
 
+#[cfg(unix)]
 pub struct PortInputSigInt {
     sigint_evt: EventFd,
 }
 
+#[cfg(unix)]
 impl PortInputSigInt {
     pub fn new() -> Self {
         PortInputSigInt {
@@ -241,12 +265,14 @@ impl PortInputSigInt {
     }
 }
 
+#[cfg(unix)]
 impl Default for PortInputSigInt {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(unix)]
 impl PortInput for PortInputSigInt {
     fn read_volatile(&mut self, buf: &mut VolatileSlice) -> Result<usize, io::Error> {
         self.sigint_evt.read()?;
@@ -270,20 +296,24 @@ impl PortInput for PortInputSigInt {
     }
 }
 
+#[cfg(unix)]
 pub struct PortInputEmpty {}
 
+#[cfg(unix)]
 impl PortInputEmpty {
     pub fn new() -> Self {
         PortInputEmpty {}
     }
 }
 
+#[cfg(unix)]
 impl Default for PortInputEmpty {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(unix)]
 impl PortInput for PortInputEmpty {
     fn read_volatile(&mut self, _buf: &mut VolatileSlice) -> Result<usize, io::Error> {
         Ok(0)
@@ -309,8 +339,10 @@ impl PortTerminalProperties for PortTerminalPropertiesFixed {
     }
 }
 
+#[cfg(unix)]
 struct PortTerminalPropertiesFd(OwnedFd);
 
+#[cfg(unix)]
 impl PortTerminalProperties for PortTerminalPropertiesFd {
     fn get_win_size(&self) -> (u16, u16) {
         let mut ws: WS = WS::default();
@@ -323,6 +355,7 @@ impl PortTerminalProperties for PortTerminalPropertiesFd {
     }
 }
 
+#[cfg(unix)]
 #[repr(C)]
 #[derive(Default)]
 struct WS {
@@ -331,4 +364,5 @@ struct WS {
     xpixel: u16,
     ypixel: u16,
 }
+#[cfg(unix)]
 ioctl_read_bad!(tiocgwinsz, TIOCGWINSZ, WS);

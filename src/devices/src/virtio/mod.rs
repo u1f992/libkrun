@@ -21,7 +21,7 @@ pub mod console;
 pub mod descriptor_utils;
 pub mod device;
 pub mod file_traits;
-#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+#[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
 pub mod fs;
 #[cfg(feature = "gpu")]
 pub mod gpu;
@@ -36,6 +36,7 @@ mod queue;
 pub mod rng;
 #[cfg(feature = "snd")]
 pub mod snd;
+#[cfg(unix)]
 pub mod vsock;
 
 #[cfg(not(feature = "tee"))]
@@ -44,7 +45,7 @@ pub use self::balloon::*;
 pub use self::block::{Block, CacheType};
 pub use self::console::*;
 pub use self::device::*;
-#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+#[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
 pub use self::fs::*;
 #[cfg(feature = "gpu")]
 pub use self::gpu::*;
@@ -56,6 +57,7 @@ pub use self::queue::{Descriptor, DescriptorChain, Queue};
 pub use self::rng::*;
 #[cfg(feature = "snd")]
 pub use self::snd::Snd;
+#[cfg(unix)]
 pub use self::vsock::*;
 
 /// When the driver initializes the device, it lets the device know about the

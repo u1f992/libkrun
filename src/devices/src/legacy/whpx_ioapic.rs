@@ -9,9 +9,6 @@
 //
 // Reference: crosvm devices/src/irqchip/whpx.rs (WhpxSplitIrqChip)
 
-use std::io;
-use std::sync::Arc;
-
 use utils::eventfd::EventFd;
 
 use crate::bus::BusDevice;

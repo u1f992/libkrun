@@ -87,10 +87,15 @@ const LINUX_ENOTRECOVERABLE: i32 = 131;
 // Errors to be directly used.
 pub const LINUX_ERANGE: i32 = 34;
 
+// The linux_error and linux_errno_raw functions translate host OS errno values
+// to Linux errno values. They use libc errno constants that are only available
+// on Unix platforms.
+#[cfg(unix)]
 pub fn linux_error(error: std::io::Error) -> std::io::Error {
     std::io::Error::from_raw_os_error(linux_errno_raw(error.raw_os_error().unwrap_or(libc::EIO)))
 }
 
+#[cfg(unix)]
 pub fn linux_errno_raw(errno: i32) -> i32 {
     match errno {
         libc::EPERM => LINUX_EPERM,
