@@ -11,13 +11,15 @@ tdx = [ "tee", "dep:tdx" ]
 efi = []
 
 [dependencies]
-libc = ">=0.2.39"
 vm-memory = { version = "0.17", default-features = false, features = ["backend-mmap"] }
-vmm-sys-util = "0.14"
 
 arch_gen = { path = "../arch_gen" }
-smbios = { path = "../smbios" }
 utils = { path = "../utils" }
+
+[target.'cfg(unix)'.dependencies]
+libc = ">=0.2.39"
+vmm-sys-util = "0.14"
+smbios = { path = "../smbios" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 kvm-bindings = { version = "0.12", features = ["fam-wrappers"] }

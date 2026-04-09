@@ -5,25 +5,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
+#[cfg(target_os = "linux")]
 mod gdt;
 /// Contains logic for setting up Advanced Programmable Interrupt Controller (local version).
+#[cfg(target_os = "linux")]
 pub mod interrupts;
 /// Layout for the x86_64 system.
 pub mod layout;
-#[cfg(not(feature = "tee"))]
+#[cfg(all(target_os = "linux", not(feature = "tee")))]
 mod mptable;
 /// Logic for configuring x86_64 model specific registers (MSRs).
+#[cfg(target_os = "linux")]
 pub mod msr;
 /// Logic for configuring x86_64 registers.
+#[cfg(target_os = "linux")]
 pub mod regs;
 
+#[cfg(target_os = "linux")]
 use crate::x86_64::layout::{EBDA_START, FIRST_ADDR_PAST_32BITS, MMIO_MEM_START};
-#[cfg(feature = "tee")]
+#[cfg(all(target_os = "linux", feature = "tee"))]
 use crate::x86_64::layout::{FIRMWARE_SIZE, FIRMWARE_START};
+#[cfg(target_os = "linux")]
 use crate::{ArchMemoryInfo, InitrdConfig};
+#[cfg(target_os = "linux")]
 use arch_gen::x86::bootparam::{boot_params, E820_RAM};
+#[cfg(target_os = "linux")]
 use vm_memory::Bytes;
+#[cfg(target_os = "linux")]
 use vm_memory::{Address, ByteValued, GuestAddress, GuestMemoryMmap};
+#[cfg(target_os = "linux")]
 use vmm_sys_util::align_upwards;
 
 // This is a workaround to the Rust enforcement specifying that any implementation of a foreign
@@ -31,10 +41,12 @@ use vmm_sys_util::align_upwards;
 // *    the type that is implementing the trait is foreign or
 // *    all of the parameters being passed to the trait (if there are any) are also foreign
 // is prohibited.
+#[cfg(target_os = "linux")]
 #[derive(Copy, Clone, Default)]
 struct BootParamsWrapper(boot_params);
 
 // It is safe to initialize BootParamsWrap which is a wrapper over `boot_params` (a series of ints).
+#[cfg(target_os = "linux")]
 unsafe impl ByteValued for BootParamsWrapper {}
 
 /// Errors thrown while configuring x86_64 system.
@@ -43,7 +55,7 @@ pub enum Error {
     /// Invalid e820 setup params.
     E820Configuration,
     /// Error writing MP table to memory.
-    #[cfg(not(feature = "tee"))]
+    #[cfg(all(target_os = "linux", not(feature = "tee")))]
     MpTableSetup(mptable::Error),
     /// Error writing the zero page of guest memory.
     ZeroPageSetup,
@@ -55,7 +67,7 @@ pub enum Error {
 /// These should be used to configure the GuestMemoryMmap structure for the platform.
 /// Make a hole for the kernel region that will be injected directly from libkrunfw's
 /// mapping, and reserve an SHM region for virtio-fs.
-#[cfg(not(feature = "tee"))]
+#[cfg(all(target_os = "linux", not(feature = "tee")))]
 pub fn arch_memory_regions(
     size: usize,
     kernel_load_addr: Option<u64>,
@@ -171,7 +183,7 @@ pub fn arch_memory_regions(
 /// For SEV, don't make a hole for the kernel, as it needs to be copied instead of injected,
 /// don't reserve an SHM region, as virtio-fs is not supported, and reserve a small 64K
 /// region for the BIOS.
-#[cfg(feature = "tee")]
+#[cfg(all(target_os = "linux", feature = "tee"))]
 pub fn arch_memory_regions(
     size: usize,
     kernel_load_addr: Option<u64>,
@@ -245,6 +257,7 @@ pub fn arch_memory_regions(
 /// * `cmdline_size` - Size of the kernel command line in bytes including the null terminator.
 /// * `initrd` - Information about where the ramdisk image was loaded in the `guest_mem`.
 /// * `num_cpus` - Number of virtual CPUs the guest will have.
+#[cfg(target_os = "linux")]
 #[allow(unused_variables)]
 pub fn configure_system(
     guest_mem: &GuestMemoryMmap,
@@ -337,6 +350,7 @@ pub fn configure_system(
 
 /// Add an e820 region to the e820 map.
 /// Returns Ok(()) if successful, or an error if there is no space left in the map.
+#[cfg(target_os = "linux")]
 fn add_e820_entry(
     params: &mut boot_params,
     addr: u64,
@@ -355,7 +369,7 @@ fn add_e820_entry(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(target_os = "linux", test))]
 mod tests {
     use super::*;
     use arch_gen::x86::bootparam::e820entry;
