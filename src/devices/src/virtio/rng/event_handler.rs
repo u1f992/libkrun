@@ -1,5 +1,7 @@
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
+#[cfg(unix)]
 use polly::event_manager::{EventManager, Subscriber};
 use utils::epoll::{EpollEvent, EventSet};
 
@@ -23,6 +25,7 @@ impl Rng {
         }
     }
 
+    #[cfg(unix)]
     fn handle_activate_event(&self, event_manager: &mut EventManager) {
         debug!("rng: activate event");
         if let Err(e) = self.activate_evt.read() {
@@ -53,6 +56,7 @@ impl Rng {
     }
 }
 
+#[cfg(unix)]
 impl Subscriber for Rng {
     fn process(&mut self, event: &EpollEvent, event_manager: &mut EventManager) {
         let source = event.fd();

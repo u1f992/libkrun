@@ -258,6 +258,7 @@ impl BusDevice for Serial {
     }
 }
 
+#[cfg(unix)]
 impl Subscriber for Serial {
     /// Handle a read event (EPOLLIN) on the serial input fd.
     fn process(&mut self, event: &EpollEvent, _: &mut EventManager) {
@@ -299,6 +300,7 @@ impl Subscriber for Serial {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::io;

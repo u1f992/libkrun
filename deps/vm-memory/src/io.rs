@@ -215,8 +215,11 @@ impl WriteVolatile for &Stdout {
 
 impl_read_write_volatile_for_raw_fd!(std::fs::File);
 impl_read_write_volatile_for_raw_fd!(std::net::TcpStream);
+#[cfg(unix)]
 impl_read_write_volatile_for_raw_fd!(std::os::unix::net::UnixStream);
+#[cfg(unix)]
 impl_read_write_volatile_for_raw_fd!(std::os::fd::OwnedFd);
+#[cfg(unix)]
 impl_read_write_volatile_for_raw_fd!(std::os::fd::BorrowedFd<'_>);
 
 /// Tries to do a single `read` syscall on the provided file descriptor, storing the data raed in

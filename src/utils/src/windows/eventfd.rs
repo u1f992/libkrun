@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{
-    DuplicateHandle, GetLastError, DUPLICATE_SAME_ACCESS, FALSE, HANDLE, WAIT_OBJECT_0,
+    DuplicateHandle, DUPLICATE_SAME_ACCESS, FALSE, HANDLE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventA, GetCurrentProcess, SetEvent, WaitForSingleObject,
@@ -88,6 +88,11 @@ impl EventFd {
     /// Returns the raw handle, usable with WaitForMultipleObjects.
     pub fn get_write_fd(&self) -> RawHandle {
         self.handle.as_raw_handle()
+    }
+
+    /// Returns a platform-agnostic pollable identifier for use with the event manager.
+    pub fn pollable_id(&self) -> usize {
+        self.handle.as_raw_handle() as usize
     }
 }
 

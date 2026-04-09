@@ -1,5 +1,7 @@
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
+#[cfg(unix)]
 use polly::event_manager::{EventManager, Subscriber};
 use utils::epoll::{EpollEvent, EventSet};
 
@@ -83,6 +85,7 @@ impl Balloon {
         }
     }
 
+    #[cfg(unix)]
     fn handle_activate_event(&self, event_manager: &mut EventManager) {
         debug!("balloon: activate event");
         if let Err(e) = self.activate_evt.read() {
@@ -153,6 +156,7 @@ impl Balloon {
     }
 }
 
+#[cfg(unix)]
 impl Subscriber for Balloon {
     fn process(&mut self, event: &EpollEvent, event_manager: &mut EventManager) {
         let source = event.fd();

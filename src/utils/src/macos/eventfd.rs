@@ -70,6 +70,11 @@ impl EventFd {
     pub fn get_write_fd(&self) -> RawFd {
         self.write_fd.as_raw_fd()
     }
+
+    /// Returns a platform-agnostic pollable identifier for use with the event manager.
+    pub fn pollable_id(&self) -> i32 {
+        self.read_fd.as_raw_fd()
+    }
 }
 
 impl AsRawFd for EventFd {
