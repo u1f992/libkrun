@@ -9,3 +9,7 @@ resolver = "2"
 [profile.release]
 #panic = "abort"
 lto = true
+
+# Use local vm-memory fork with rawfd removed from defaults for Windows compat.
+[patch.crates-io]
+vm-memory = { path = "deps/vm-memory" }
