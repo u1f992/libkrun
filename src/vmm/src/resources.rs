@@ -59,6 +59,18 @@ impl TsiFlags {
     pub fn contains(&self, other: Self) -> bool {
         (self.0 & other.0) == other.0
     }
+    pub fn from_bits(bits: u32) -> Option<Self> {
+        // Accept any combination of known bits
+        let known = Self::HIJACK_INET.0 | Self::HIJACK_UNIX.0;
+        if bits & !known == 0 {
+            Some(TsiFlags(bits))
+        } else {
+            None
+        }
+    }
+    pub fn empty() -> Self {
+        TsiFlags(0)
+    }
 }
 
 /// Errors encountered when configuring microVM resources.
