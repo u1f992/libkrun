@@ -7,8 +7,14 @@
 use std::fs::File;
 #[cfg(feature = "tee")]
 use std::io::BufReader;
+#[cfg(unix)]
 use std::os::fd::RawFd;
 use std::path::PathBuf;
+
+/// On Windows, use i32 as a stand-in for file descriptor values.
+/// The builder will use Windows HANDLEs differently.
+#[cfg(windows)]
+pub type RawFd = i32;
 
 #[cfg(feature = "tee")]
 use serde::{Deserialize, Serialize};
@@ -17,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::vmm_config::block::{BlockBuilder, BlockConfigError, BlockDeviceConfig};
 use crate::vmm_config::external_kernel::ExternalKernel;
 use crate::vmm_config::firmware::FirmwareConfig;
-#[cfg(not(feature = "tee"))]
+#[cfg(not(any(feature = "tee", target_os = "windows")))]
 use crate::vmm_config::fs::*;
 #[cfg(feature = "tee")]
 use crate::vmm_config::kernel_bundle::{InitrdBundle, QbootBundle, QbootBundleError};
@@ -38,7 +44,22 @@ use krun_display::DisplayBackend;
 type Result<E> = std::result::Result<(), E>;
 
 // Re-export TsiFlags from devices crate
+#[cfg(unix)]
 pub use devices::virtio::TsiFlags;
+
+/// Stub TsiFlags for Windows where vsock is not yet supported.
+#[cfg(windows)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TsiFlags(u32);
+
+#[cfg(windows)]
+impl TsiFlags {
+    pub const HIJACK_INET: Self = TsiFlags(1);
+    pub const HIJACK_UNIX: Self = TsiFlags(2);
+    pub fn contains(&self, other: Self) -> bool {
+        (self.0 & other.0) == other.0
+    }
+}
 
 /// Errors encountered when configuring microVM resources.
 #[derive(Debug)]
@@ -145,7 +166,7 @@ pub struct VmResources {
     #[cfg(feature = "tee")]
     pub initrd_bundle: Option<InitrdBundle>,
     /// The fs device.
-    #[cfg(not(feature = "tee"))]
+    #[cfg(not(any(feature = "tee", target_os = "windows")))]
     pub fs: Vec<FsDeviceConfig>,
     /// The vsock device.
     pub vsock: VsockBuilder,
@@ -261,8 +282,11 @@ impl VmResources {
     }
 
     pub fn set_kernel_bundle(&mut self, kernel_bundle: KernelBundle) -> Result<KernelBundleError> {
-        // Safe because this call just returns the page size and doesn't have any side effects.
+        // Get the system page size.
+        #[cfg(unix)]
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+        #[cfg(windows)]
+        let page_size: usize = 4096;
 
         if kernel_bundle.host_addr == 0 || (kernel_bundle.host_addr as usize) & (page_size - 1) != 0
         {
@@ -315,7 +339,7 @@ impl VmResources {
         Ok(())
     }
 
-    #[cfg(not(feature = "tee"))]
+    #[cfg(not(any(feature = "tee", target_os = "windows")))]
     pub fn add_fs_device(&mut self, config: FsDeviceConfig) {
         self.fs.push(config)
     }

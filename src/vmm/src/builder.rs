@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{self, IsTerminal, Read};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::fd::{BorrowedFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
@@ -42,12 +44,18 @@ use devices::legacy::Serial;
 use devices::legacy::VcpuList;
 #[cfg(target_os = "macos")]
 use devices::legacy::{GicV3, HvfGicV3};
-#[cfg(target_arch = "x86_64")]
-use devices::legacy::{IoApic, IrqChipT};
+#[cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))]
+use devices::legacy::IrqChipT;
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+use devices::legacy::IoApic;
 use devices::legacy::{IrqChip, IrqChipDevice};
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 use devices::legacy::{KvmGicV2, KvmGicV3};
-use devices::virtio::{port_io, MmioTransport, PortDescription, VirtioDevice, Vsock};
+#[cfg(unix)]
+use devices::virtio::port_io;
+use devices::virtio::{MmioTransport, PortDescription, VirtioDevice};
+#[cfg(unix)]
+use devices::virtio::Vsock;
 
 #[cfg(feature = "tee")]
 use kbs_types::Tee;
@@ -57,10 +65,11 @@ use crate::device_manager;
 use crate::signal_handler::register_sigint_handler;
 #[cfg(target_os = "linux")]
 use crate::signal_handler::register_sigwinch_handler;
+#[cfg(unix)]
 use crate::terminal::{term_restore_mode, term_set_raw_mode};
 #[cfg(feature = "blk")]
 use crate::vmm_config::block::BlockBuilder;
-#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+#[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
 use crate::vmm_config::fs::FsDeviceConfig;
 use crate::vmm_config::kernel_cmdline::DEFAULT_KERNEL_CMDLINE;
 #[cfg(target_os = "linux")]
@@ -74,7 +83,7 @@ use device_manager::shm::ShmManager;
 use devices::virtio::display::DisplayInfo;
 #[cfg(feature = "gpu")]
 use devices::virtio::display::NoopDisplayBackend;
-#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+#[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
 use devices::virtio::{fs::ExportTable, VirtioShmRegion};
 use flate2::read::GzDecoder;
 #[cfg(feature = "gpu")]
@@ -83,9 +92,11 @@ use krun_display::DisplayBackend;
 use krun_display::IntoDisplayBackend;
 #[cfg(feature = "amd-sev")]
 use kvm_bindings::KVM_MAX_CPUID_ENTRIES;
+#[cfg(unix)]
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 #[cfg(target_arch = "x86_64")]
 use linux_loader::loader::{self, KernelLoader};
+#[cfg(unix)]
 use nix::unistd::isatty;
 use polly::event_manager::{Error as EventManagerError, EventManager};
 use utils::eventfd::EventFd;
@@ -548,7 +559,11 @@ fn choose_payload(vm_resources: &VmResources) -> Result<Payload, StartMicrovmErr
         #[cfg(feature = "tee")]
         return Ok(Payload::Tee);
 
-        #[cfg(all(target_os = "linux", target_arch = "x86_64", not(feature = "tee")))]
+        #[cfg(all(
+            any(target_os = "linux", target_os = "windows"),
+            target_arch = "x86_64",
+            not(feature = "tee")
+        ))]
         return Ok(Payload::KernelMmap);
 
         #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
@@ -759,8 +774,10 @@ pub fn build_microvm(
     // We can't call to `setup_terminal_raw_mode` until `Vmm` is created,
     // so let's keep track of FDs connected to legacy serial devices here
     // and set raw mode on them later.
+    #[cfg(unix)]
     let mut serial_ttys = Vec::new();
 
+    #[cfg(unix)]
     for s in &vm_resources.serial_consoles {
         let input: Option<Box<dyn devices::legacy::ReadableFd + Send>> = if s.input_fd >= 0 {
             let file = unsafe { File::from_raw_fd(s.input_fd) };
@@ -1009,6 +1026,7 @@ pub fn build_microvm(
     };
 
     // Set raw mode for FDs that are connected to legacy serial devices.
+    #[cfg(unix)]
     for serial_tty in serial_ttys {
         setup_terminal_raw_mode(&mut vmm, Some(serial_tty), false);
     }
@@ -1042,7 +1060,7 @@ pub fn build_microvm(
         console_id += 1;
     }
 
-    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
     let export_table: Option<ExportTable> = if cfg!(feature = "gpu") {
         Some(Default::default())
     } else {
@@ -1074,7 +1092,7 @@ pub fn build_microvm(
         attach_input_devices(&mut vmm, &vm_resources.input_backends, intc.clone())?;
     }
 
-    #[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+    #[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
     attach_fs_devices(
         &mut vmm,
         &vm_resources.fs,
@@ -1089,6 +1107,7 @@ pub fn build_microvm(
     #[cfg(feature = "blk")]
     attach_block_devices(&mut vmm, &vm_resources.block, intc.clone())?;
 
+    #[cfg(unix)]
     if let Some(vsock) = vm_resources.vsock.get() {
         attach_unixsock_vsock_device(&mut vmm, vsock, event_manager, intc.clone())?;
         let tsi_flags = vm_resources.vsock.tsi_flags();
@@ -1190,13 +1209,11 @@ fn load_external_kernel(
         }
         #[cfg(target_arch = "x86_64")]
         KernelFormat::Elf => {
-            let mut file = File::options()
-                .read(true)
-                .write(false)
-                .open(external_kernel.path.clone())
+            let data: Vec<u8> = std::fs::read(external_kernel.path.clone())
                 .map_err(StartMicrovmError::ElfOpenKernel)?;
-            let load_result = loader::Elf::load(guest_mem, None, &mut file, None)
-                .map_err(StartMicrovmError::ElfLoadKernel)?;
+            let load_result =
+                loader::Elf::load(guest_mem, None, &mut std::io::Cursor::new(data), None)
+                    .map_err(StartMicrovmError::ElfLoadKernel)?;
             load_result.kernel_load
         }
         #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
@@ -1360,7 +1377,7 @@ fn load_payload(
                 .unwrap();
             Ok((guest_mem, GuestAddress(kernel_entry_addr), None, None))
         }
-        #[cfg(all(target_arch = "x86_64", not(feature = "tee")))]
+        #[cfg(all(target_os = "linux", target_arch = "x86_64", not(feature = "tee")))]
         Payload::KernelMmap => {
             let (kernel_entry_addr, kernel_host_addr, kernel_guest_addr, kernel_size) =
                 if let Some(kernel_bundle) = &_vm_resources.kernel_bundle {
@@ -1394,6 +1411,28 @@ fn load_payload(
                 None,
                 None,
             ))
+        }
+        // On Windows, we cannot use MmapRegion::build_raw. Copy the kernel instead.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64", not(feature = "tee")))]
+        Payload::KernelMmap => {
+            let (kernel_entry_addr, kernel_host_addr, kernel_guest_addr, kernel_size) =
+                if let Some(kernel_bundle) = &_vm_resources.kernel_bundle {
+                    (
+                        kernel_bundle.entry_addr,
+                        kernel_bundle.host_addr,
+                        kernel_bundle.guest_addr,
+                        kernel_bundle.size,
+                    )
+                } else {
+                    return Err(StartMicrovmError::MissingKernelConfig);
+                };
+
+            let kernel_data =
+                unsafe { std::slice::from_raw_parts(kernel_host_addr as *const u8, kernel_size) };
+            guest_mem
+                .write(kernel_data, GuestAddress(kernel_guest_addr))
+                .unwrap();
+            Ok((guest_mem, GuestAddress(kernel_entry_addr), None, None))
         }
         Payload::ExternalKernel(external_kernel) => {
             let (entry_addr, initrd_config, cmdline) =
@@ -1530,7 +1569,7 @@ pub fn create_guest_memory(
 
     let mut shm_manager = ShmManager::new(&arch_mem_info);
 
-    #[cfg(not(feature = "tee"))]
+    #[cfg(not(any(feature = "tee", target_os = "windows")))]
     for (index, fs) in vm_resources.fs.iter().enumerate() {
         if let Some(shm_size) = fs.shm_size {
             shm_manager
@@ -1658,6 +1697,7 @@ pub fn setup_serial_device(
         .map_err(StartMicrovmError::Internal)?;
     let has_input = input.is_some();
     let serial = Arc::new(Mutex::new(Serial::new(interrupt_evt, out, input)));
+    #[cfg(unix)]
     if has_input {
         if let Err(e) = event_manager.add_subscriber(serial.clone()) {
             // TODO: We just log this message, and immediately return Ok, instead of returning the
@@ -1725,10 +1765,12 @@ fn attach_legacy_devices(
         .map_err(StartMicrovmError::Internal)?;
 
     if split_irqchip {
-        mmio_device_manager
-            .register_mmio_ioapic(intc)
-            .map_err(Error::RegisterMMIODevice)
-            .map_err(StartMicrovmError::Internal)?;
+        if let Some(intc) = intc {
+            mmio_device_manager
+                .register_mmio_ioapic(intc)
+                .map_err(Error::RegisterMMIODevice)
+                .map_err(StartMicrovmError::Internal)?;
+        }
     }
 
     // WHPX does not support irqfd, so we skip irqfd registration on Windows.
@@ -1977,14 +2019,14 @@ fn attach_mmio_device(
         vmm.mmio_device_manager
             .register_mmio_device(mmio_device, type_id, id)?;
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     vmm.mmio_device_manager
         .add_device_to_cmdline(_cmdline, _mmio_base, _irq)?;
 
     Ok(())
 }
 
-#[cfg(not(any(feature = "tee", feature = "aws-nitro")))]
+#[cfg(not(any(feature = "tee", feature = "aws-nitro", target_os = "windows")))]
 fn attach_fs_devices(
     vmm: &mut Vmm,
     fs_devs: &[FsDeviceConfig],
@@ -2035,6 +2077,7 @@ fn attach_fs_devices(
     Ok(())
 }
 
+#[cfg(unix)]
 fn autoconfigure_console_ports(
     vmm: &mut Vmm,
     vm_resources: &VmResources,
@@ -2150,6 +2193,25 @@ fn autoconfigure_console_ports(
     }
 }
 
+/// On Windows, console auto-configuration is not yet supported.
+/// Returns a single console with no input/output and a fixed-size terminal.
+#[cfg(windows)]
+fn autoconfigure_console_ports(
+    _vmm: &mut Vmm,
+    _vm_resources: &VmResources,
+    _cfg: Option<&DefaultVirtioConsoleConfig>,
+    _creating_implicit_console: bool,
+) -> std::result::Result<Vec<PortDescription>, StartMicrovmError> {
+    use devices::virtio::port_io;
+    let terminal_properties = port_io::term_fixed_size(0, 0);
+    Ok(vec![PortDescription::console(
+        None,
+        Some(port_io::output_to_log_as_err()),
+        terminal_properties,
+    )])
+}
+
+#[cfg(unix)]
 fn setup_terminal_raw_mode(
     vmm: &mut Vmm,
     term_fd: Option<BorrowedFd<'_>>,
@@ -2174,6 +2236,7 @@ fn setup_terminal_raw_mode(
     }
 }
 
+#[cfg(unix)]
 fn create_explicit_ports(
     vmm: &mut Vmm,
     port_configs: &[PortConfig],
@@ -2220,6 +2283,21 @@ fn create_explicit_ports(
     Ok(ports)
 }
 
+/// On Windows, explicit port configuration is not yet supported.
+#[cfg(windows)]
+fn create_explicit_ports(
+    _vmm: &mut Vmm,
+    _port_configs: &[PortConfig],
+) -> std::result::Result<Vec<PortDescription>, StartMicrovmError> {
+    use devices::virtio::port_io;
+    // TODO: Implement Windows explicit port configuration.
+    Ok(vec![PortDescription::console(
+        None,
+        Some(port_io::output_to_log_as_err()),
+        port_io::term_fixed_size(0, 0),
+    )])
+}
+
 fn attach_console_devices(
     vmm: &mut Vmm,
     event_manager: &mut EventManager,
@@ -2247,6 +2325,7 @@ fn attach_console_devices(
 
     vmm.exit_observers.push(console.clone());
 
+    #[cfg(unix)]
     event_manager
         .add_subscriber(console.clone())
         .map_err(RegisterEvent)?;
@@ -2277,6 +2356,7 @@ fn attach_net_devices(
     Ok(())
 }
 
+#[cfg(unix)]
 fn attach_unixsock_vsock_device(
     vmm: &mut Vmm,
     unix_vsock: &Arc<Mutex<Vsock>>,
@@ -2307,6 +2387,7 @@ fn attach_balloon_device(
 
     let balloon = Arc::new(Mutex::new(devices::virtio::Balloon::new().unwrap()));
 
+    #[cfg(unix)]
     event_manager
         .add_subscriber(balloon.clone())
         .map_err(RegisterEvent)?;
@@ -2347,6 +2428,7 @@ fn attach_rng_device(
 
     let rng = Arc::new(Mutex::new(devices::virtio::Rng::new().unwrap()));
 
+    #[cfg(unix)]
     event_manager
         .add_subscriber(rng.clone())
         .map_err(RegisterEvent)?;

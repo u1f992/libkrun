@@ -282,7 +282,7 @@ impl Vmm {
         initrd: &Option<InitrdConfig>,
         _smbios_oem_strings: &Option<Vec<String>>,
     ) -> Result<()> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
         {
             let cmdline_len = if cfg!(feature = "tee") {
                 arch::x86_64::layout::CMDLINE_SEV_SIZE

@@ -185,13 +185,18 @@ impl Drop for SafePartition {
 // SafeEmulator -- RAII wrapper for the WHPX instruction emulator
 // ---------------------------------------------------------------------------
 
-/// RAII wrapper around `WHV_EMULATOR_HANDLE`.
+/// RAII wrapper around the WHPX emulator handle (`*mut c_void`).
 ///
 /// The instruction emulator is used to decode IO-port and MMIO instructions
 /// that WHPX does not decode in-kernel (unlike KVM).
 struct SafeEmulator {
-    handle: WHV_EMULATOR_HANDLE,
+    handle: *mut std::ffi::c_void,
 }
+
+// Safety: The WHPX emulator handle is an opaque pointer that can be safely
+// sent between threads. The emulator API is thread-safe when used with
+// proper synchronization (which we provide via the per-vCPU ownership model).
+unsafe impl Send for SafeEmulator {}
 
 /// Context passed into the emulator callbacks so the callbacks can reach
 /// the partition handle, vCPU index, and device buses.
@@ -213,7 +218,7 @@ impl SafeEmulator {
             WHvEmulatorSetVirtualProcessorRegisters: Some(Self::set_registers_cb),
             WHvEmulatorTranslateGvaPage: Some(Self::translate_gva_cb),
         };
-        let mut handle: WHV_EMULATOR_HANDLE = std::ptr::null_mut();
+        let mut handle: *mut std::ffi::c_void = std::ptr::null_mut();
         // Safety: callbacks are valid function pointers; handle receives the
         // emulator that the kernel allocates.
         check_whpx!(unsafe { WHvEmulatorCreateEmulator(&callbacks, &mut handle) })
@@ -224,10 +229,10 @@ impl SafeEmulator {
     // -- Emulator callbacks (stdcall ABI, invoked by WHPX during emulation) --
 
     unsafe extern "system" fn io_port_cb(
-        context: *mut std::ffi::c_void,
+        context: *const std::ffi::c_void,
         io_access: *mut WHV_EMULATOR_IO_ACCESS_INFO,
     ) -> i32 {
-        let ctx = &mut *(context as *mut EmulatorContext);
+        let ctx = &*(context as *const EmulatorContext);
         let info = &mut *io_access;
         let port = info.Port as u64;
         let size = info.AccessSize as usize;
@@ -248,10 +253,10 @@ impl SafeEmulator {
     }
 
     unsafe extern "system" fn memory_cb(
-        context: *mut std::ffi::c_void,
+        context: *const std::ffi::c_void,
         memory_access: *mut WHV_EMULATOR_MEMORY_ACCESS_INFO,
     ) -> i32 {
-        let ctx = &mut *(context as *mut EmulatorContext);
+        let ctx = &*(context as *const EmulatorContext);
         let info = &mut *memory_access;
         let gpa = info.GpaAddress;
         let size = info.AccessSize as usize;
@@ -270,7 +275,7 @@ impl SafeEmulator {
     }
 
     unsafe extern "system" fn get_registers_cb(
-        context: *mut std::ffi::c_void,
+        context: *const std::ffi::c_void,
         register_names: *const WHV_REGISTER_NAME,
         register_count: u32,
         register_values: *mut WHV_REGISTER_VALUE,
@@ -286,7 +291,7 @@ impl SafeEmulator {
     }
 
     unsafe extern "system" fn set_registers_cb(
-        context: *mut std::ffi::c_void,
+        context: *const std::ffi::c_void,
         register_names: *const WHV_REGISTER_NAME,
         register_count: u32,
         register_values: *const WHV_REGISTER_VALUE,
@@ -302,11 +307,11 @@ impl SafeEmulator {
     }
 
     unsafe extern "system" fn translate_gva_cb(
-        context: *mut std::ffi::c_void,
-        gva: WHV_GUEST_VIRTUAL_ADDRESS,
+        context: *const std::ffi::c_void,
+        gva: u64,
         translate_flags: WHV_TRANSLATE_GVA_FLAGS,
         translation_result: *mut WHV_TRANSLATE_GVA_RESULT_CODE,
-        gpa: *mut WHV_GUEST_PHYSICAL_ADDRESS,
+        gpa: *mut u64,
     ) -> i32 {
         let ctx = &*(context as *const EmulatorContext);
         let mut result: WHV_TRANSLATE_GVA_RESULT = zeroed();
@@ -950,7 +955,7 @@ impl Vcpu {
         check_whpx!(hr).map_err(Error::MmioEmulation)?;
 
         // Bit 0 of the status is EmulationSuccessful.
-        let emulation_ok = (unsafe { status.Anonymous.AsUINT32 } & 1) != 0;
+        let emulation_ok = (unsafe { status.AsUINT32 } & 1) != 0;
         if !emulation_ok {
             warn!(
                 "WHPX MMIO emulation was not successful for vCPU {}",
@@ -983,7 +988,7 @@ impl Vcpu {
 
         check_whpx!(hr).map_err(Error::IoEmulation)?;
 
-        let emulation_ok = (unsafe { status.Anonymous.AsUINT32 } & 1) != 0;
+        let emulation_ok = (unsafe { status.AsUINT32 } & 1) != 0;
         if !emulation_ok {
             warn!(
                 "WHPX IO emulation was not successful for vCPU {}",

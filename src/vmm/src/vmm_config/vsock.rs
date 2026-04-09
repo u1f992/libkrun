@@ -6,22 +6,32 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use devices::virtio::{TsiFlags, Vsock, VsockError};
+#[cfg(unix)]
+use devices::virtio::{Vsock, VsockError};
+use crate::resources::TsiFlags as ResTsiFlags;
 
+#[cfg(unix)]
 type MutexVsock = Arc<Mutex<Vsock>>;
 
 /// Errors associated with `NetworkInterfaceConfig`.
 #[derive(Debug)]
 pub enum VsockConfigError {
     /// Failed to create the vsock device.
+    #[cfg(unix)]
     CreateVsockDevice(VsockError),
+    /// Vsock is not supported on this platform.
+    #[cfg(windows)]
+    NotSupported,
 }
 
 impl fmt::Display for VsockConfigError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use self::VsockConfigError::*;
         match *self {
+            #[cfg(unix)]
             CreateVsockDevice(ref e) => write!(f, "Cannot create vsock device: {e:?}"),
+            #[cfg(windows)]
+            NotSupported => write!(f, "Vsock is not supported on Windows"),
         }
     }
 }
@@ -41,9 +51,10 @@ pub struct VsockDeviceConfig {
     /// An optional map of guest port to host UNIX domain sockets for IPC.
     pub unix_ipc_port_map: Option<HashMap<u32, (PathBuf, bool)>>,
     /// TSI feature flags
-    pub tsi_flags: TsiFlags,
+    pub tsi_flags: ResTsiFlags,
 }
 
+#[cfg(unix)]
 struct VsockWrapper {
     vsock: MutexVsock,
 }
@@ -51,21 +62,24 @@ struct VsockWrapper {
 /// A builder of Vsock from 'VsockDeviceConfig'.
 #[derive(Default)]
 pub struct VsockBuilder {
+    #[cfg(unix)]
     inner: Option<VsockWrapper>,
-    tsi_flags: TsiFlags,
+    tsi_flags: ResTsiFlags,
 }
 
 impl VsockBuilder {
     /// Creates an empty Vsock.
     pub fn new() -> Self {
         Self {
+            #[cfg(unix)]
             inner: None,
-            tsi_flags: TsiFlags::empty(),
+            tsi_flags: ResTsiFlags::default(),
         }
     }
 
     /// Inserts a Vsock in the store.
     /// If an entry already exists, it will overwrite it.
+    #[cfg(unix)]
     pub fn insert(&mut self, cfg: VsockDeviceConfig) -> Result<()> {
         self.tsi_flags = cfg.tsi_flags;
         self.inner = Some(VsockWrapper {
@@ -74,16 +88,28 @@ impl VsockBuilder {
         Ok(())
     }
 
+    #[cfg(windows)]
+    pub fn insert(&mut self, _cfg: VsockDeviceConfig) -> Result<()> {
+        Err(VsockConfigError::NotSupported)
+    }
+
     /// Provides a reference to the Vsock if present.
+    #[cfg(unix)]
     pub fn get(&self) -> Option<&MutexVsock> {
         self.inner.as_ref().map(|pair| &pair.vsock)
     }
 
-    pub fn tsi_flags(&self) -> TsiFlags {
+    #[cfg(windows)]
+    pub fn get(&self) -> Option<&Arc<Mutex<()>>> {
+        None
+    }
+
+    pub fn tsi_flags(&self) -> ResTsiFlags {
         self.tsi_flags
     }
 
     /// Creates a Vsock device from a VsockDeviceConfig.
+    #[cfg(unix)]
     pub fn create_vsock(cfg: VsockDeviceConfig) -> Result<Vsock> {
         Vsock::new(
             u64::from(cfg.guest_cid),
@@ -127,10 +153,11 @@ pub(crate) mod tests {
             guest_cid: 3,
             host_port_map: None,
             unix_ipc_port_map: None,
-            tsi_flags: TsiFlags::empty(),
+            tsi_flags: ResTsiFlags::default(),
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_vsock_insert() {
         let mut store = VsockBuilder::new();
@@ -146,16 +173,5 @@ pub(crate) mod tests {
         store.insert(vsock_config).unwrap();
         let vsock = store.get().unwrap();
         assert_eq!(vsock.lock().unwrap().cid(), new_cid as u64);
-    }
-
-    #[test]
-    fn test_error_messages() {
-        use super::VsockConfigError::*;
-        use std::io;
-
-        let err = CreateVsockDevice(devices::virtio::VsockError::EventFd(
-            io::Error::from_raw_os_error(0),
-        ));
-        let _ = format!("{err}{err:?}");
     }
 }

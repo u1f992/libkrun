@@ -1,10 +1,14 @@
+#[cfg(unix)]
 use nix::sys::termios::{cfmakeraw, tcgetattr, tcsetattr, LocalFlags, SetArg, Termios};
+#[cfg(unix)]
 use std::os::fd::BorrowedFd;
 
+#[cfg(unix)]
 #[must_use]
 pub struct TerminalMode(Termios);
 
 // Enable raw mode for the terminal and return the old state to be restored
+#[cfg(unix)]
 pub fn term_set_raw_mode(
     term: BorrowedFd,
     handle_signals_by_terminal: bool,
@@ -22,6 +26,7 @@ pub fn term_set_raw_mode(
     Ok(TerminalMode(old_state))
 }
 
+#[cfg(unix)]
 pub fn term_restore_mode(term: BorrowedFd, restore: &TerminalMode) -> Result<(), nix::Error> {
     tcsetattr(term, SetArg::TCSANOW, &restore.0)
 }
