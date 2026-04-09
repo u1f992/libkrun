@@ -38,11 +38,16 @@ use macos::vstate;
 
 use std::fmt::{Display, Formatter};
 use std::io;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use std::time::Duration;
+
+use polly::event_manager::Pollable;
 
 #[cfg(target_arch = "x86_64")]
 use crate::device_manager::legacy::PortIODeviceManager;
@@ -260,7 +265,7 @@ impl Vmm {
         Ok(())
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub fn resume_vcpus(&mut self) -> Result<()> {
         Ok(())
     }
@@ -364,11 +369,15 @@ impl Vmm {
                 .on_vmm_exit();
         }
 
-        // Exit from Firecracker using the provided exit code. Safe because we're terminating
-        // the process anyway.
+        // Exit the process. On Unix we use libc::_exit to avoid running
+        // atexit handlers which could interfere with the VMM teardown.
+        // On Windows we use std::process::exit (same pattern as crosvm).
+        #[cfg(unix)]
         unsafe {
             libc::_exit(exit_code);
         }
+        #[cfg(windows)]
+        std::process::exit(exit_code);
     }
 
     /// Returns a reference to the inner KVM Vm object.
@@ -394,13 +403,26 @@ impl Vmm {
     }
 }
 
+impl Vmm {
+    /// Returns the pollable identifier for the exit event.
+    #[cfg(unix)]
+    fn exit_evt_pollable(&self) -> Pollable {
+        self.exit_evt.as_raw_fd()
+    }
+
+    #[cfg(windows)]
+    fn exit_evt_pollable(&self) -> Pollable {
+        self.exit_evt.as_raw_handle() as Pollable
+    }
+}
+
 impl Subscriber for Vmm {
     /// Handle a read event (EPOLLIN).
     fn process(&mut self, event: &EpollEvent, _: &mut EventManager) {
-        let source = event.fd();
+        let source = event.data() as Pollable;
         let event_set = event.event_set();
 
-        if source == self.exit_evt.as_raw_fd() && event_set == EventSet::IN {
+        if source == self.exit_evt_pollable() && event_set == EventSet::IN {
             let _ = self.exit_evt.read();
             // Query each vcpu for the exit_code.
             // If the exit_code can't be found on any vcpu, it means that the exit signal
@@ -434,7 +456,7 @@ impl Subscriber for Vmm {
     fn interest_list(&self) -> Vec<EpollEvent> {
         vec![EpollEvent::new(
             EventSet::IN,
-            self.exit_evt.as_raw_fd() as u64,
+            self.exit_evt_pollable() as u64,
         )]
     }
 }
