@@ -74,7 +74,7 @@ impl EpollEvent {
 }
 
 /// Registration entry: the handle to wait on and the associated event data.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Registration {
     handle: RawHandle,
     event: EpollEvent,

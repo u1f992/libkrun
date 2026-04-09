@@ -4,16 +4,15 @@
 //! EventFd emulation using Windows auto-reset Event objects.
 
 use std::io;
-use std::os::windows::io::{AsRawHandle, OwnedHandle, RawHandle};
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, DuplicateHandle, GetLastError, DUPLICATE_SAME_ACCESS, FALSE, HANDLE,
-    WAIT_OBJECT_0,
+    DuplicateHandle, GetLastError, DUPLICATE_SAME_ACCESS, FALSE, HANDLE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
-    CreateEventA, GetCurrentProcess, ResetEvent, SetEvent, WaitForSingleObject,
+    CreateEventA, GetCurrentProcess, SetEvent, WaitForSingleObject,
 };
 
 pub const EFD_NONBLOCK: i32 = 1;
@@ -31,8 +30,8 @@ impl EventFd {
     pub fn new(flag: i32) -> Result<EventFd, io::Error> {
         // Create an auto-reset event (bManualReset = FALSE).
         let h = unsafe { CreateEventA(std::ptr::null(), FALSE, FALSE, std::ptr::null()) };
-        if h == 0 {
-            return Err(io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+        if h.is_null() {
+            return Err(io::Error::last_os_error());
         }
         let handle = unsafe { OwnedHandle::from_raw_handle(h as RawHandle) };
         Ok(EventFd {
@@ -46,7 +45,7 @@ impl EventFd {
         self.counter.fetch_add(v, Ordering::SeqCst);
         let ret = unsafe { SetEvent(self.handle.as_raw_handle() as HANDLE) };
         if ret == 0 {
-            return Err(io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+            return Err(io::Error::last_os_error());
         }
         Ok(())
     }
@@ -63,7 +62,7 @@ impl EventFd {
     }
 
     pub fn try_clone(&self) -> Result<EventFd, io::Error> {
-        let mut new_handle: HANDLE = 0;
+        let mut new_handle: HANDLE = std::ptr::null_mut();
         let ret = unsafe {
             DuplicateHandle(
                 GetCurrentProcess(),
@@ -76,7 +75,7 @@ impl EventFd {
             )
         };
         if ret == 0 {
-            return Err(io::Error::from_raw_os_error(unsafe { GetLastError() } as i32));
+            return Err(io::Error::last_os_error());
         }
         let handle = unsafe { OwnedHandle::from_raw_handle(new_handle as RawHandle) };
         Ok(EventFd {

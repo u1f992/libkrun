@@ -6,18 +6,19 @@ use std::fmt;
 /// Constant to convert seconds to nanoseconds.
 pub const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
-/// Wrapper over `libc::clockid_t` to specify Linux Kernel clock source.
+/// Wrapper over clock source types.
 pub enum ClockType {
-    /// Equivalent to `libc::CLOCK_MONOTONIC`.
+    /// Monotonic clock.
     Monotonic,
-    /// Equivalent to `libc::CLOCK_REALTIME`.
+    /// Real (wall-clock) time.
     Real,
-    /// Equivalent to `libc::CLOCK_PROCESS_CPUTIME_ID`.
+    /// Process CPU time.
     ProcessCpu,
-    /// Equivalent to `libc::CLOCK_THREAD_CPUTIME_ID`.
+    /// Thread CPU time.
     ThreadCpu,
 }
 
+#[cfg(unix)]
 impl From<ClockType> for libc::clockid_t {
     fn from(ctype: ClockType) -> libc::clockid_t {
         match ctype {
@@ -49,6 +50,7 @@ pub struct LocalTime {
 
 impl LocalTime {
     /// Returns the [LocalTime](struct.LocalTime.html) structure for the calling moment.
+    #[cfg(unix)]
     pub fn now() -> LocalTime {
         let mut timespec = libc::timespec {
             tv_sec: 0,
@@ -85,6 +87,33 @@ impl LocalTime {
             mon: tm.tm_mon,
             year: tm.tm_year,
             nsec: timespec.tv_nsec,
+        }
+    }
+
+    /// Returns the [LocalTime](struct.LocalTime.html) structure for the calling moment.
+    #[cfg(windows)]
+    pub fn now() -> LocalTime {
+        use std::time::SystemTime;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = now.as_secs() as i64;
+        let nsec = now.subsec_nanos() as i64;
+
+        // Use libc's localtime_s on Windows (note: argument order is reversed vs localtime_r).
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::localtime_s(&mut tm, &secs);
+        }
+
+        LocalTime {
+            sec: tm.tm_sec,
+            min: tm.tm_min,
+            hour: tm.tm_hour,
+            mday: tm.tm_mday,
+            mon: tm.tm_mon,
+            year: tm.tm_year,
+            nsec,
         }
     }
 }
@@ -139,10 +168,7 @@ pub fn timestamp_cycles() -> u64 {
 }
 
 /// Returns a timestamp in nanoseconds based on the provided clock type.
-///
-/// # Arguments
-///
-/// * `clock_type` - Identifier of the Linux Kernel clock on which to act.
+#[cfg(unix)]
 pub fn get_time(clock_type: ClockType) -> u64 {
     let mut time_struct = libc::timespec {
         tv_sec: 0,
@@ -153,12 +179,33 @@ pub fn get_time(clock_type: ClockType) -> u64 {
     seconds_to_nanoseconds(time_struct.tv_sec).unwrap() as u64 + (time_struct.tv_nsec as u64)
 }
 
+/// Returns a timestamp in nanoseconds based on the provided clock type.
+/// On Windows, uses std::time for Monotonic/Real and falls back to 0 for CPU times.
+#[cfg(windows)]
+pub fn get_time(clock_type: ClockType) -> u64 {
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    // Use a static Instant for monotonic reference.
+    static START: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+    match clock_type {
+        ClockType::Monotonic => {
+            let _ = *START; // ensure initialized
+            START.elapsed().as_nanos() as u64
+        }
+        ClockType::Real => {
+            let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+            d.as_nanos() as u64
+        }
+        // CPU time tracking not available on Windows via std; return monotonic as fallback.
+        ClockType::ProcessCpu | ClockType::ThreadCpu => {
+            let _ = *START;
+            START.elapsed().as_nanos() as u64
+        }
+    }
+}
+
 /// Converts a timestamp in seconds to an equivalent one in nanoseconds.
 /// Returns `None` if the conversion overflows.
-///
-/// # Arguments
-///
-/// * `value` - Timestamp in seconds.
 pub fn seconds_to_nanoseconds(value: i64) -> Option<i64> {
     value.checked_mul(NANOS_PER_SECOND as i64)
 }
