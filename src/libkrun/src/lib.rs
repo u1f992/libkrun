@@ -1799,6 +1799,8 @@ pub extern "C" fn krun_get_shutdown_eventfd(ctx_id: u32) -> i32 {
                 return efd.get_write_fd();
                 #[cfg(target_os = "linux")]
                 return efd.as_raw_fd();
+                #[cfg(target_os = "windows")]
+                return efd.pollable_id() as i32;
             } else {
                 -libc::EINVAL
             }
