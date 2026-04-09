@@ -20,6 +20,9 @@ use windows_sys::Win32::System::Threading::WaitForMultipleObjects;
 
 const FALSE: i32 = 0;
 
+/// Pollable handle identifier. Handles are cast to usize for use as HashMap keys.
+pub type Pollable = usize;
+
 #[repr(i32)]
 pub enum ControlOperation {
     Add,
@@ -65,8 +68,8 @@ impl EpollEvent {
         self.u64
     }
 
-    pub fn fd(&self) -> RawHandle {
-        self.u64 as RawHandle
+    pub fn fd(&self) -> Pollable {
+        self.u64 as Pollable
     }
 }
 
@@ -97,32 +100,31 @@ impl Epoll {
     pub fn ctl(
         &self,
         operation: ControlOperation,
-        fd: RawHandle,
+        pollable: Pollable,
         event: &EpollEvent,
     ) -> io::Result<()> {
         let mut regs = self.registrations.lock().unwrap();
-        let key = fd as usize;
 
         match operation {
             ControlOperation::Add => {
-                debug!("epoll add handle: {:?}", fd);
+                debug!("epoll add handle: {pollable}");
                 regs.insert(
-                    key,
+                    pollable,
                     Registration {
-                        handle: fd,
+                        handle: pollable as RawHandle,
                         event: *event,
                     },
                 );
             }
             ControlOperation::Modify => {
-                debug!("epoll modify handle: {:?}", fd);
-                if let Some(reg) = regs.get_mut(&key) {
+                debug!("epoll modify handle: {pollable}");
+                if let Some(reg) = regs.get_mut(&pollable) {
                     reg.event = *event;
                 }
             }
             ControlOperation::Delete => {
-                debug!("epoll delete handle: {:?}", fd);
-                regs.remove(&key);
+                debug!("epoll delete handle: {pollable}");
+                regs.remove(&pollable);
             }
         }
         Ok(())
@@ -242,15 +244,14 @@ mod tests {
         let evt = EventFd::new(EFD_NONBLOCK).unwrap();
         evt.write(1).unwrap();
 
-        let event = EpollEvent::new(EventSet::IN, evt.as_raw_handle() as u64);
-        epoll
-            .ctl(ControlOperation::Add, evt.as_raw_handle(), &event)
-            .unwrap();
+        let p = evt.as_raw_handle() as Pollable;
+        let event = EpollEvent::new(EventSet::IN, p as u64);
+        epoll.ctl(ControlOperation::Add, p, &event).unwrap();
 
         let mut ready_events = vec![EpollEvent::default(); 10];
         let ev_count = epoll.wait(10, 1000, &mut ready_events[..]).unwrap();
         assert!(ev_count >= 1);
-        assert_eq!(ready_events[0].data(), evt.as_raw_handle() as u64);
+        assert_eq!(ready_events[0].data(), p as u64);
     }
 
     #[test]
@@ -260,12 +261,11 @@ mod tests {
         let evt = EventFd::new(EFD_NONBLOCK).unwrap();
         evt.write(1).unwrap();
 
-        let event = EpollEvent::new(EventSet::IN, evt.as_raw_handle() as u64);
+        let p = evt.as_raw_handle() as Pollable;
+        let event = EpollEvent::new(EventSet::IN, p as u64);
+        epoll.ctl(ControlOperation::Add, p, &event).unwrap();
         epoll
-            .ctl(ControlOperation::Add, evt.as_raw_handle(), &event)
-            .unwrap();
-        epoll
-            .ctl(ControlOperation::Delete, evt.as_raw_handle(), &EpollEvent::default())
+            .ctl(ControlOperation::Delete, p, &EpollEvent::default())
             .unwrap();
 
         let mut ready_events = vec![EpollEvent::default(); 10];
