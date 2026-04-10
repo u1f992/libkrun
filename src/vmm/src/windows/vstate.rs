@@ -243,11 +243,21 @@ impl SafeEmulator {
         if let Some(bus) = ctx.io_bus {
             if info.Direction == 0 {
                 // PIO IN (read from device)
-                bus.read(ctx.vcpu_index as u64, port, data);
+                let found = bus.read(ctx.vcpu_index as u64, port, data);
+                static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
+                    eprintln!("[WHPX] PIO IN  port=0x{:x} size={} data={:?} found={}", port, size, &data[..size], found);
+                }
             } else {
                 // PIO OUT (write to device)
-                bus.write(ctx.vcpu_index as u64, port, data);
+                let found = bus.write(ctx.vcpu_index as u64, port, data);
+                static LOGGED_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if LOGGED_W.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
+                    eprintln!("[WHPX] PIO OUT port=0x{:x} size={} data={:?} found={}", port, size, &data[..size], found);
+                }
             }
+        } else {
+            eprintln!("[WHPX] IO port 0x{:x} dir={} - NO IO BUS", port, info.Direction);
         }
         S_OK
     }
@@ -707,6 +717,10 @@ impl Vcpu {
 
     /// Sets the IO port bus for this vCPU.
     pub fn set_io_bus(&mut self, io_bus: devices::Bus) {
+        // Debug: check if serial is registered at 0x3f8
+        let has_serial = io_bus.get_device(0x3f8).is_some();
+        let has_cmos = io_bus.get_device(0x70).is_some();
+        eprintln!("[WHPX] set_io_bus: serial@0x3f8={}, cmos@0x70={}", has_serial, has_cmos);
         self.io_bus = Some(io_bus);
     }
 

@@ -771,6 +771,17 @@ pub fn build_microvm(
         )?);
     };
 
+    // On Windows, always create a default serial device for kernel console output
+    // when no serial was explicitly configured (no firmware/EFI boot).
+    #[cfg(target_os = "windows")]
+    if serial_devices.is_empty() {
+        serial_devices.push(setup_serial_device(
+            event_manager,
+            None,
+            Some(Box::new(std::io::stderr())),
+        )?);
+    }
+
     // We can't call to `setup_terminal_raw_mode` until `Vmm` is created,
     // so let's keep track of FDs connected to legacy serial devices here
     // and set raw mode on them later.
