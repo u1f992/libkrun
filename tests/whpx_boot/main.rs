@@ -69,9 +69,10 @@ fn main() {
 
     // Kernel cmdline: root on /dev/vda if disk provided, otherwise just serial console
     let cmdline = if disk_path.is_some() {
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic irqfixup 8250.nr_uarts=1 root=/dev/vda rw".to_string()
+        // When disk is provided: boot directly from rootfs, no initrd needed
+        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0 root=/dev/vda rw rootwait".to_string()
     } else {
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic irqfixup 8250.nr_uarts=1".to_string()
+        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0".to_string()
     };
 
     // External kernel
@@ -80,15 +81,21 @@ fn main() {
     } else {
         KernelFormat::Raw
     };
+    // When --disk is provided, don't load initrd (boot directly from rootfs)
+    let use_initrd = disk_path.is_none();
     let external_kernel = ExternalKernel {
         path: kernel_path,
         format,
-        initramfs_path: initrd_path.clone(),
-        initramfs_size: initrd_path
-            .as_ref()
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map(|m| m.len())
-            .unwrap_or(0),
+        initramfs_path: if use_initrd { initrd_path.clone() } else { None },
+        initramfs_size: if use_initrd {
+            initrd_path
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .unwrap_or(0)
+        } else {
+            0
+        },
         cmdline: Some(cmdline),
     };
     vm_resources.set_external_kernel(external_kernel);
