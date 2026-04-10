@@ -1906,6 +1906,8 @@ fn create_vcpus_x86_64(
         )
         .map_err(Error::Vcpu)?;
 
+        vcpu.set_io_bus(io_bus.clone());
+
         vcpu.configure_x86_64(guest_mem, entry_addr, vcpu_config, kernel_boot)
             .map_err(Error::Vcpu)?;
 
