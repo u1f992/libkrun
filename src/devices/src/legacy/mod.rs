@@ -15,6 +15,8 @@ mod i8042;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod ioapic;
 mod irqchip;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+mod pit;
 #[cfg(all(target_os = "linux", target_arch = "riscv64"))]
 mod kvmaia;
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
@@ -69,6 +71,8 @@ pub use self::kvmgicv2::KvmGicV2;
 pub use self::kvmgicv3::KvmGicV3;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use self::kvmioapic::KvmIoapic;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+pub use self::pit::Pit;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub use self::whpx_ioapic::WhpxIoapic;
 #[cfg(target_arch = "aarch64")]

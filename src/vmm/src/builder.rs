@@ -38,6 +38,8 @@ use devices::legacy::KvmAia;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use devices::legacy::KvmIoapic;
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+use devices::legacy::Pit;
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 use devices::legacy::WhpxIoapic;
 use devices::legacy::Serial;
 #[cfg(target_os = "macos")]
@@ -1794,6 +1796,17 @@ fn attach_legacy_devices(
                 .map_err(Error::RegisterMMIODevice)
                 .map_err(StartMicrovmError::Internal)?;
         }
+    }
+
+    // Register PIT (i8254) on the IO bus for bootstrap timer interrupts.
+    if let Some(ref intc) = intc {
+        let pit = Arc::new(Mutex::new(Pit::new(intc.clone())));
+        pio_device_manager
+            .io_bus
+            .insert(pit, 0x40, 0x4)
+            .map_err(|e| StartMicrovmError::Internal(Error::LegacyIOBus(
+                crate::device_manager::legacy::Error::BusError(e),
+            )))?;
     }
 
     // WHPX does not support irqfd, so we skip irqfd registration on Windows.
