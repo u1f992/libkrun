@@ -64,11 +64,20 @@ impl WhpxIoapic {
         let trigger_mode = ((entry >> RTE_TRIGGER_MODE_SHIFT) & 0x1) as u64;
         let destination = ((entry >> RTE_DEST_SHIFT) & 0xFF) as u32;
 
-        let bitfield: u64 = delivery_mode | (dest_mode << 4) | (trigger_mode << 5);
+        // WHV_INTERRUPT_CONTROL._bitfield layout (MS official doc):
+        // bits 0-7:   Type (WHV_INTERRUPT_TYPE, 8 bits)
+        // bits 8-11:  DestinationMode (WHV_INTERRUPT_DESTINATION_MODE, 4 bits)
+        // bits 12-15: TriggerMode (WHV_INTERRUPT_TRIGGER_MODE, 4 bits)
+        // bits 16-63: Reserved
+        let interrupt_type = delivery_mode & 0xFF;
+        let bitfield: u64 = interrupt_type | (dest_mode << 8) | (trigger_mode << 12);
 
+        // Force destination to 0 (BSP / vCPU 0) for single-CPU VMs.
+        // The guest kernel may set destination=1 based on its APIC ID
+        // enumeration, but WHPX uses vpindex (0) as the APIC target.
         let interrupt = WHV_INTERRUPT_CONTROL {
             _bitfield: bitfield,
-            Destination: destination,
+            Destination: 0,
             Vector: vector,
         };
 
@@ -82,9 +91,18 @@ impl WhpxIoapic {
 
         if result != 0 {
             log::warn!(
-                "WHvRequestInterrupt failed pin={} vec={} dest={} trigger={}: HRESULT 0x{:08X}",
+                "WHvRequestInterrupt FAILED pin={} vec={} dest={} trigger={}: HRESULT 0x{:08X}",
                 pin, vector, destination, trigger_mode, result as u32
             );
+        } else if pin != 0 {
+            // Log non-PIT IRQ delivery
+            static IRQ_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if IRQ_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 20 {
+                log::info!(
+                    "WHvRequestInterrupt OK pin={} vec={} dest=0 trigger={}",
+                    pin, vector, trigger_mode
+                );
+            }
         }
     }
 
@@ -178,6 +196,13 @@ impl BusDevice for WhpxIoapic {
                             (old_entry & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
                     }
 
+                    let new_entry = self.ioredtbl[pin];
+                    let new_vector = (new_entry & RTE_VECTOR_MASK) as u8;
+                    let new_dest = ((new_entry >> RTE_DEST_SHIFT) & 0xFF) as u8;
+                    let new_trigger = ((new_entry >> RTE_TRIGGER_MODE_SHIFT) & 1) as u8;
+                    let new_mask = ((new_entry >> RTE_MASK_SHIFT) & 1) as u8;
+                    log::debug!("IOAPIC pin {} write: vec={} dest={} trigger={} mask={}", pin, new_vector, new_dest, new_trigger, new_mask);
+
                     // If entry was just unmasked, check if there's a pending level
                     let was_masked = ((old_entry >> RTE_MASK_SHIFT) & 1) != 0;
                     let now_masked = ((self.ioredtbl[pin] >> RTE_MASK_SHIFT) & 1) != 0;
@@ -233,10 +258,24 @@ impl IrqChipT for WhpxIoapic {
         if let Some(irq) = irq_line {
             let pin = irq as usize;
             if pin < IOAPIC_NUM_PINS {
-                // Assert then deassert for edge-triggered behavior
-                // (virtio devices use edge-triggered interrupts).
-                self.service_irq(pin, true);
+                let entry = self.ioredtbl[pin];
+                let masked = ((entry >> RTE_MASK_SHIFT) & 1) != 0;
+                let vector = (entry & RTE_VECTOR_MASK) as u8;
+                // Only log non-PIT (pin != 0) IRQs
+                if pin != 0 {
+                    static SET_IRQ_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    if SET_IRQ_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 20 {
+                        log::info!("set_irq pin={} vec={} masked={}", pin, vector, masked);
+                    }
+                }
+                let injected = self.service_irq(pin, true);
                 self.service_irq(pin, false);
+                if pin != 0 {
+                    static SVC_LOG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                    if SVC_LOG.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+                        log::info!("service_irq pin={} injected={}", pin, injected);
+                    }
+                }
             }
         }
         Ok(())

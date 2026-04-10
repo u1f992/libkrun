@@ -232,6 +232,7 @@ impl NetWorker {
     }
 
     pub(crate) fn process_backend_socket_readable(&mut self) {
+        log::info!("process_backend_socket_readable called");
         if let Err(e) = self.rx_q.queue.enable_notification(&self.mem) {
             error!("error disabling queue notifications: {e:?}");
         }
