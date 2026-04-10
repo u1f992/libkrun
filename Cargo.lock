@@ -1921,6 +1921,7 @@ name = "whpx-boot-test"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "devices",
  "env_logger",
  "log",
  "polly",

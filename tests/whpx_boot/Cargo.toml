@@ -8,7 +8,8 @@ name = "whpx-boot-test"
 path = "main.rs"
 
 [dependencies]
-vmm = { path = "../../src/vmm" }
+vmm = { path = "../../src/vmm", features = ["net"] }
+devices = { path = "../../src/devices", features = ["net"] }
 utils = { path = "../../src/utils" }
 polly = { path = "../../src/polly" }
 crossbeam-channel = ">=0.5.15"

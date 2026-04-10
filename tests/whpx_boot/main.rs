@@ -56,9 +56,24 @@ fn main() {
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0),
-        cmdline: Some("console=ttyS0 earlyprintk=ttyS0 reboot=t panic=-1 tsc=reliable lpj=7200000 nohpet lapic".to_string()),
+        cmdline: Some("console=ttyS0 earlyprintk=ttyS0 reboot=t panic=-1 tsc=reliable lpj=7200000 nohpet lapic ip=dhcp".to_string()),
     };
     vm_resources.set_external_kernel(external_kernel);
+
+    // Add slirp network device on Windows
+    #[cfg(target_os = "windows")]
+    {
+        use vmm::vmm_config::net::NetworkInterfaceConfig;
+        use devices::virtio::net::device::VirtioNetBackend;
+        let net_config = NetworkInterfaceConfig {
+            iface_id: "eth0".to_string(),
+            backend: VirtioNetBackend::Slirp,
+            mac: [0x52, 0x54, 0x00, 0x12, 0x34, 0x56],
+            features: 0,
+        };
+        vm_resources.add_network_interface(net_config).expect("Failed to add net device");
+        println!("Slirp network device added");
+    }
 
     // Create event manager
     let mut event_manager = EventManager::new().expect("Failed to create event manager");
