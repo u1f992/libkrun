@@ -1,0 +1,16 @@
+[package]
+name = "whpx-boot-test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "whpx-boot-test"
+path = "main.rs"
+
+[dependencies]
+vmm = { path = "../../src/vmm" }
+utils = { path = "../../src/utils" }
+polly = { path = "../../src/polly" }
+crossbeam-channel = ">=0.5.15"
+env_logger = "0.11"
+log = "0.4"
