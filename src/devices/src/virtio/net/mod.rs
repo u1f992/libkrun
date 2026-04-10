@@ -15,7 +15,11 @@ mod backend;
 pub mod device;
 #[cfg(target_os = "linux")]
 mod tap;
+#[cfg(target_os = "windows")]
+mod slirp_backend;
+#[cfg(unix)]
 mod unixgram;
+#[cfg(unix)]
 mod unixstream;
 mod worker;
 

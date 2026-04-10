@@ -1,8 +1,12 @@
 use crate::virtio::net::backend::ConnectError;
 #[cfg(target_os = "linux")]
 use crate::virtio::net::tap::Tap;
+#[cfg(unix)]
 use crate::virtio::net::unixgram::Unixgram;
+#[cfg(unix)]
 use crate::virtio::net::unixstream::Unixstream;
+#[cfg(target_os = "windows")]
+use crate::virtio::net::slirp_backend::SlirpBackend;
 use crate::virtio::net::{MAX_BUFFER_SIZE, QUEUE_SIZE};
 use crate::virtio::{DeviceQueue, InterruptTransport};
 
@@ -12,6 +16,7 @@ use super::VNET_HDR_LEN;
 
 #[cfg(target_os = "macos")]
 use std::os::fd::RawFd;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::thread;
 use std::{cmp, result};
@@ -46,27 +51,35 @@ impl NetWorker {
         cfg_backend: VirtioNetBackend,
     ) -> Result<Self, ConnectError> {
         let backend = match cfg_backend {
+            #[cfg(unix)]
             VirtioNetBackend::UnixstreamFd(fd) => {
                 // SAFETY: we need to trust that the library user has configured
                 // the backend with a healthy file descriptor.
                 let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
                 Box::new(Unixstream::new(owned_fd)) as Box<dyn NetBackend + Send>
             }
+            #[cfg(unix)]
             VirtioNetBackend::UnixstreamPath(path) => {
                 Box::new(Unixstream::open(path)?) as Box<dyn NetBackend + Send>
             }
+            #[cfg(unix)]
             VirtioNetBackend::UnixgramFd(fd) => {
                 // SAFETY: we need to trust that the library user has configured
                 // the backend with a healthy file descriptor.
                 let owned_fd = unsafe { OwnedFd::from_raw_fd(fd) };
                 Box::new(Unixgram::new(owned_fd)) as Box<dyn NetBackend + Send>
             }
+            #[cfg(unix)]
             VirtioNetBackend::UnixgramPath(path, vfkit_magic) => {
                 Box::new(Unixgram::open(path, vfkit_magic)?) as Box<dyn NetBackend + Send>
             }
             #[cfg(target_os = "linux")]
             VirtioNetBackend::Tap(tap_name) => {
                 Box::new(Tap::new(tap_name, _vnet_features)?) as Box<dyn NetBackend + Send>
+            }
+            #[cfg(target_os = "windows")]
+            VirtioNetBackend::Slirp => {
+                Box::new(SlirpBackend::new()?) as Box<dyn NetBackend + Send>
             }
         };
 

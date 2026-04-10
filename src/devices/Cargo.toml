@@ -57,7 +57,10 @@ kvm-ioctls = "0.22"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_System_Hypervisor",
+    "Win32_System_Threading",
+    "Win32_Networking_WinSock",
 ] }
+libslirp-sys = "4.2.1"
 
 [target.'cfg(any(target_arch = "aarch64", target_arch = "riscv64"))'.dependencies]
 vm-fdt = ">= 0.2.0"

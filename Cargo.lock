@@ -424,6 +424,7 @@ dependencies = [
  "kvm-ioctls",
  "libc",
  "libloading",
+ "libslirp-sys",
  "log",
  "lru",
  "nix 0.30.1",
@@ -911,6 +912,15 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall",
+]
+
+[[package]]
+name = "libslirp-sys"
+version = "4.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2772370ce9b7fa05c7eae0bd033005e139a64d52cee498a7905b3eb5d243c5f4"
+dependencies = [
+ "pkg-config",
 ]
 
 [[package]]

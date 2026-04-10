@@ -67,6 +67,9 @@ pub enum VirtioNetBackend {
     UnixgramPath(PathBuf, bool),
     #[cfg(target_os = "linux")]
     Tap(String),
+    /// In-process libslirp network backend (Windows)
+    #[cfg(target_os = "windows")]
+    Slirp,
 }
 
 pub struct Net {
