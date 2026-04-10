@@ -19,7 +19,7 @@ use crate::vmm_config::machine_config::CpuFeaturesTemplate;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use utils::eventfd::EventFd;
-use vm_memory::{Address, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
+use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 use windows_sys::Win32::Foundation::S_OK;
 use windows_sys::Win32::System::Hypervisor::*;
@@ -710,12 +710,14 @@ impl Vcpu {
         self.io_bus = Some(io_bus);
     }
 
-    /// Configures an x86-64 specific vCPU.
+    /// Configures an x86-64 specific vCPU for Linux direct boot.
     ///
-    /// On WHPX most initial register state is handled by the platform or the
-    /// kernel loader.  This method sets up the initial RIP (instruction pointer)
-    /// to the kernel entry point and configures basic segment registers for
-    /// protected/long mode entry.
+    /// This is the WHPX equivalent of the KVM backend's `setup_regs`,
+    /// `setup_sregs`, and `setup_page_tables`. It:
+    /// 1. Writes identity-mapped page tables (PML4/PDPTE/PDE) to guest memory
+    /// 2. Writes a GDT with NULL, CODE64, DATA, and TSS entries
+    /// 3. Sets all segment, control, and general-purpose registers via
+    ///    `WHvSetVirtualProcessorRegisters` to enter 64-bit long mode
     ///
     /// # Arguments
     ///
@@ -725,7 +727,7 @@ impl Vcpu {
     /// * `kernel_boot`       - Whether we are performing a direct kernel boot.
     pub fn configure_x86_64(
         &mut self,
-        _guest_mem: &GuestMemoryMmap,
+        guest_mem: &GuestMemoryMmap,
         kernel_start_addr: GuestAddress,
         _vcpu_config: &VcpuConfig,
         kernel_boot: bool,
@@ -736,18 +738,228 @@ impl Vcpu {
             return Ok(());
         }
 
-        // Set RIP to the kernel entry point.
-        // TODO(Phase 3): set up full register state for Linux direct boot
-        // (segment registers, page tables, GDT, etc.) similar to what the
-        // KVM backend does via arch::x86_64::regs::setup_regs/setup_sregs.
-        // For now we only set RIP -- the boot shim / firmware is expected
-        // to have set up the rest.
-        let reg_names = [WHvX64RegisterRip];
-        let mut reg_values: [WHV_REGISTER_VALUE; 1] = unsafe { zeroed() };
-        reg_values[0].Reg64 = kernel_start_addr.raw_value();
+        // --------------------------------------------------------------------
+        // Layout constants (mirroring arch/src/x86_64/layout.rs)
+        // --------------------------------------------------------------------
+        const BOOT_STACK_POINTER: u64 = 0x8ff0;
+        const ZERO_PAGE_START: u64 = 0x7000;
 
-        // Safety: register arrays are correctly sized and the vCPU belongs
-        // to this partition.
+        // Page table addresses (mirroring arch/src/x86_64/regs.rs)
+        const PML4_START: u64 = 0x9000;
+        const PDPTE_START: u64 = 0xA000;
+        const PDE_START: u64 = 0xB000;
+
+        // GDT address (mirroring arch/src/x86_64/regs.rs)
+        const GDT_START: u64 = 0x500;
+        const IDT_START: u64 = 0x520;
+
+        // --------------------------------------------------------------------
+        // 1. Write page tables to guest memory
+        //
+        // Identity map the first 1 GB using 2 MB pages:
+        //   PML4[0]  -> PDPTE  (flags: Present | Writable = 0x03)
+        //   PDPTE[0] -> PDE    (flags: Present | Writable = 0x03)
+        //   PDE[i]   -> i*2MB  (flags: Present | Writable | PageSize = 0x83)
+        // --------------------------------------------------------------------
+        guest_mem
+            .write_obj(PDPTE_START | 0x03u64, GuestAddress(PML4_START))
+            .map_err(Error::GuestMemoryMmap)?;
+
+        guest_mem
+            .write_obj(PDE_START | 0x03u64, GuestAddress(PDPTE_START))
+            .map_err(Error::GuestMemoryMmap)?;
+
+        for i in 0u64..512 {
+            let pde_entry: u64 = (i << 21) | 0x83;
+            guest_mem
+                .write_obj(pde_entry, GuestAddress(PDE_START + i * 8))
+                .map_err(Error::GuestMemoryMmap)?;
+        }
+
+        // --------------------------------------------------------------------
+        // 2. Write GDT to guest memory
+        //
+        // GDT entry encoding (from arch/src/x86_64/gdt.rs):
+        //   gdt_entry(flags, base, limit) -> u64
+        // Entries:
+        //   [0] = 0x0000_0000_0000_0000  (NULL)
+        //   [1] = gdt_entry(0xa09b, 0, 0xfffff)  CODE64
+        //   [2] = gdt_entry(0xc093, 0, 0xfffff)  DATA
+        //   [3] = gdt_entry(0x808b, 0, 0xfffff)  TSS
+        // --------------------------------------------------------------------
+
+        /// Encode a GDT entry from flags, base, and limit.
+        /// Identical to arch::x86_64::gdt::gdt_entry but inlined here
+        /// because the original is behind `cfg(target_os = "linux")`.
+        fn gdt_entry(flags: u16, base: u32, limit: u32) -> u64 {
+            ((u64::from(base) & 0xff00_0000u64) << (56 - 24))
+                | ((u64::from(flags) & 0x0000_f0ffu64) << 40)
+                | ((u64::from(limit) & 0x000f_0000u64) << (48 - 16))
+                | ((u64::from(base) & 0x00ff_ffffu64) << 16)
+                | (u64::from(limit) & 0x0000_ffffu64)
+        }
+
+        let gdt: [u64; 4] = [
+            0,                              // NULL
+            gdt_entry(0xa09b, 0, 0xfffff),  // CODE64
+            gdt_entry(0xc093, 0, 0xfffff),  // DATA
+            gdt_entry(0x808b, 0, 0xfffff),  // TSS
+        ];
+
+        for (i, entry) in gdt.iter().enumerate() {
+            guest_mem
+                .write_obj(*entry, GuestAddress(GDT_START + (i as u64) * 8))
+                .map_err(Error::GuestMemoryMmap)?;
+        }
+
+        // IDT: write a zero entry at the IDT address.
+        guest_mem
+            .write_obj(0u64, GuestAddress(IDT_START))
+            .map_err(Error::GuestMemoryMmap)?;
+
+        // --------------------------------------------------------------------
+        // 3. Build segment register attributes from GDT entries
+        //
+        // WHPX WHV_X64_SEGMENT_REGISTER.Attributes uses the VMX access-rights
+        // encoding packed into a u16:
+        //   bits 3:0  = Type
+        //   bit  4    = S (descriptor type: 1=code/data, 0=system)
+        //   bits 6:5  = DPL
+        //   bit  7    = Present
+        //   bit  12   = AVL
+        //   bit  13   = L (64-bit mode)
+        //   bit  14   = D/B
+        //   bit  15   = G (granularity)
+        // --------------------------------------------------------------------
+
+        /// Extract VMX-style segment attributes from a raw GDT entry.
+        fn seg_attributes(entry: u64) -> u16 {
+            // Low byte of attributes: type(4) | S(1) | DPL(2) | P(1) = bits 40..47
+            let lo = ((entry >> 40) & 0xFF) as u16;
+            // High nibble: AVL(1) | L(1) | D/B(1) | G(1) = bits 52..55
+            let hi = ((entry >> 52) & 0x0F) as u16;
+            lo | (hi << 12)
+        }
+
+        /// Extract the base address from a GDT entry.
+        fn seg_base(entry: u64) -> u64 {
+            ((entry & 0xFF00_0000_0000_0000) >> 32)
+                | ((entry & 0x0000_00FF_0000_0000) >> 16)
+                | ((entry & 0x0000_0000_FFFF_0000) >> 16)
+        }
+
+        /// Extract the limit from a GDT entry.
+        fn seg_limit(entry: u64) -> u32 {
+            (((entry & 0x000F_0000_0000_0000) >> 32) | (entry & 0x0000_0000_0000_FFFF)) as u32
+        }
+
+        // --------------------------------------------------------------------
+        // 4. Set all registers via WHvSetVirtualProcessorRegisters
+        //
+        // Register layout (18 registers total):
+        //   [0]  RIP     = kernel entry address
+        //   [1]  RFLAGS  = 0x2
+        //   [2]  RSP     = BOOT_STACK_POINTER
+        //   [3]  RBP     = BOOT_STACK_POINTER
+        //   [4]  RSI     = ZERO_PAGE_START
+        //   [5]  CR0     = PE | PG = 0x8000_0001
+        //   [6]  CR3     = PML4_START (0x9000)
+        //   [7]  CR4     = PAE = 0x20
+        //   [8]  EFER    = LME | LMA = 0x500
+        //   [9]  CS      = code segment (selector=8)
+        //   [10] DS      = data segment (selector=16)
+        //   [11] ES      = data segment (selector=16)
+        //   [12] FS      = data segment (selector=16)
+        //   [13] GS      = data segment (selector=16)
+        //   [14] SS      = data segment (selector=16)
+        //   [15] TR      = TSS segment  (selector=24)
+        //   [16] GDTR    = base=0x500, limit=31
+        //   [17] IDTR    = base=0x520, limit=7
+        // --------------------------------------------------------------------
+
+        const NUM_REGS: usize = 18;
+        let reg_names: [WHV_REGISTER_NAME; NUM_REGS] = [
+            WHvX64RegisterRip,     // 0
+            WHvX64RegisterRflags,  // 1
+            WHvX64RegisterRsp,     // 2
+            WHvX64RegisterRbp,     // 3
+            WHvX64RegisterRsi,     // 4
+            WHvX64RegisterCr0,     // 5
+            WHvX64RegisterCr3,     // 6
+            WHvX64RegisterCr4,     // 7
+            WHvX64RegisterEfer,    // 8
+            WHvX64RegisterCs,      // 9
+            WHvX64RegisterDs,      // 10
+            WHvX64RegisterEs,      // 11
+            WHvX64RegisterFs,      // 12
+            WHvX64RegisterGs,      // 13
+            WHvX64RegisterSs,      // 14
+            WHvX64RegisterTr,      // 15
+            WHvX64RegisterGdtr,    // 16
+            WHvX64RegisterIdtr,    // 17
+        ];
+
+        let mut reg_values: [WHV_REGISTER_VALUE; NUM_REGS] = unsafe { zeroed() };
+
+        // General-purpose and control registers (use Reg64 union field)
+        reg_values[0].Reg64 = kernel_start_addr.raw_value(); // RIP
+        reg_values[1].Reg64 = 0x2;                           // RFLAGS
+        reg_values[2].Reg64 = BOOT_STACK_POINTER;            // RSP
+        reg_values[3].Reg64 = BOOT_STACK_POINTER;            // RBP
+        reg_values[4].Reg64 = ZERO_PAGE_START;               // RSI
+        reg_values[5].Reg64 = 0x8000_0001;                   // CR0: PE | PG
+        reg_values[6].Reg64 = PML4_START;                    // CR3
+        reg_values[7].Reg64 = 0x20;                          // CR4: PAE
+        reg_values[8].Reg64 = 0x500;                         // EFER: LME | LMA
+
+        // CS: code segment from gdt[1], selector = 1*8 = 8
+        let code_entry = gdt[1];
+        reg_values[9].Segment = WHV_X64_SEGMENT_REGISTER {
+            Base: seg_base(code_entry),
+            Limit: seg_limit(code_entry),
+            Selector: 8,
+            Attributes: seg_attributes(code_entry),
+        };
+
+        // DS/ES/FS/GS/SS: data segment from gdt[2], selector = 2*8 = 16
+        let data_entry = gdt[2];
+        let data_seg = WHV_X64_SEGMENT_REGISTER {
+            Base: seg_base(data_entry),
+            Limit: seg_limit(data_entry),
+            Selector: 16,
+            Attributes: seg_attributes(data_entry),
+        };
+        reg_values[10].Segment = data_seg; // DS
+        reg_values[11].Segment = data_seg; // ES
+        reg_values[12].Segment = data_seg; // FS
+        reg_values[13].Segment = data_seg; // GS
+        reg_values[14].Segment = data_seg; // SS
+
+        // TR: TSS segment from gdt[3], selector = 3*8 = 24
+        let tss_entry = gdt[3];
+        reg_values[15].Segment = WHV_X64_SEGMENT_REGISTER {
+            Base: seg_base(tss_entry),
+            Limit: seg_limit(tss_entry),
+            Selector: 24,
+            Attributes: seg_attributes(tss_entry),
+        };
+
+        // GDTR: base = GDT_START, limit = (4 entries * 8 bytes) - 1 = 31
+        reg_values[16].Table = WHV_X64_TABLE_REGISTER {
+            Pad: [0u16; 3],
+            Base: GDT_START,
+            Limit: 31,
+        };
+
+        // IDTR: base = IDT_START, limit = 7
+        reg_values[17].Table = WHV_X64_TABLE_REGISTER {
+            Pad: [0u16; 3],
+            Base: IDT_START,
+            Limit: 7,
+        };
+
+        // Safety: register arrays are correctly sized, the vCPU belongs to
+        // this partition, and all union fields are initialized.
         check_whpx!(unsafe {
             WHvSetVirtualProcessorRegisters(
                 self.partition.partition,
@@ -760,9 +972,11 @@ impl Vcpu {
         .map_err(Error::SetRegisters)?;
 
         debug!(
-            "WHPX vCPU {} configured: RIP=0x{:x}",
+            "WHPX vCPU {} configured for long mode: RIP=0x{:x} RSP=0x{:x} CR3=0x{:x}",
             self.id,
-            kernel_start_addr.raw_value()
+            kernel_start_addr.raw_value(),
+            BOOT_STACK_POINTER,
+            PML4_START,
         );
 
         Ok(())
@@ -840,6 +1054,10 @@ impl Vcpu {
         })
         .map_err(Error::RunVirtualProcessor)?;
 
+        debug!(
+            "WHPX vCPU {} exit reason: {}",
+            self.id, self.exit_context.ExitReason
+        );
         self.handle_exit()
     }
 
