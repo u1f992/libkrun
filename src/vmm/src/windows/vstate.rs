@@ -1140,7 +1140,11 @@ impl Vcpu {
         eprintln!("[WHPX] vCPU {} run loop starting", self.id);
         loop {
             match self.run_emulation() {
-                Ok(VcpuEmulation::Handled) => {}
+                Ok(VcpuEmulation::Handled) => {
+                    // Yield to other threads (event manager, virtio workers)
+                    // to prevent vCPU MMIO exit loop from monopolizing CPU.
+                    std::thread::yield_now();
+                }
                 Ok(VcpuEmulation::Stopped) => {
                     self.exit(FC_EXIT_CODE_OK);
                     break;
