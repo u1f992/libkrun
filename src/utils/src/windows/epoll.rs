@@ -175,8 +175,11 @@ impl Epoll {
                     WaitForMultipleObjects(1, &(entry.handle as HANDLE), FALSE, 0)
                 };
                 if single_ret == WAIT_OBJECT_0 {
+                    // On Windows, WaitForMultipleObjects only tells us the handle
+                    // is signaled. Return IN (readable) without HANG_UP flags,
+                    // since Windows events don't have hang-up semantics.
                     events[count] = EpollEvent {
-                        events: entry.event.events,
+                        events: EventSet::IN.bits(),
                         u64: entry.event.u64,
                     };
                     count += 1;
@@ -191,7 +194,7 @@ impl Epoll {
                 .any(|e| e.u64 == entries[first_idx].event.u64);
             if !first_already_included && count < max_events && count < events.len() {
                 events[count] = EpollEvent {
-                    events: entries[first_idx].event.events,
+                    events: EventSet::IN.bits(),
                     u64: entries[first_idx].event.u64,
                 };
                 count += 1;
