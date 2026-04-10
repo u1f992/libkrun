@@ -51,12 +51,23 @@ impl EventFd {
     }
 
     pub fn read(&self) -> Result<u64, io::Error> {
-        let timeout_ms = if self.nonblock { 0 } else { 0xFFFFFFFF }; // INFINITE
+        // First check if there's a value in the atomic counter (the event may
+        // have already been consumed by WaitForMultipleObjects in the Epoll
+        // layer, which resets auto-reset events).
+        let val = self.counter.swap(0, Ordering::SeqCst);
+        if val > 0 {
+            return Ok(val);
+        }
+
+        // No pending value; wait for the event.
+        let timeout_ms = if self.nonblock { 0 } else { 0xFFFFFFFF };
         let ret =
             unsafe { WaitForSingleObject(self.handle.as_raw_handle() as HANDLE, timeout_ms) };
         if ret != WAIT_OBJECT_0 {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "event not signaled"));
         }
+        // Event was signaled; counter was already swapped to 0 above, so
+        // the write() that signaled us incremented it after our swap.
         let val = self.counter.swap(0, Ordering::SeqCst);
         Ok(val)
     }
