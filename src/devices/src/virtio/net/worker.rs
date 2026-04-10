@@ -80,8 +80,8 @@ impl NetWorker {
                 Box::new(Tap::new(tap_name, _vnet_features)?) as Box<dyn NetBackend + Send>
             }
             #[cfg(target_os = "windows")]
-            VirtioNetBackend::Slirp => {
-                Box::new(SlirpBackend::new()?) as Box<dyn NetBackend + Send>
+            VirtioNetBackend::Slirp { port_forwards } => {
+                Box::new(SlirpBackend::new(port_forwards)?) as Box<dyn NetBackend + Send>
             }
         };
 

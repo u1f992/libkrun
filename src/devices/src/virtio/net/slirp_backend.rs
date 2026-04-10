@@ -95,7 +95,8 @@ unsafe impl Send for SlirpTimer {}
 
 impl SlirpBackend {
     /// Create a new SlirpBackend. Spawns the slirp event loop thread.
-    pub fn new() -> Result<Self, ConnectError> {
+    /// `port_forwards` is a list of (host_port, guest_port) TCP forwarding rules.
+    pub fn new(port_forwards: Vec<(u16, u16)>) -> Result<Self, ConnectError> {
         // Channels for frame exchange. Bounded to avoid unbounded memory growth.
         let (tx_sender, tx_receiver) = crossbeam_channel::bounded::<Vec<u8>>(256);
         let (rx_sender, rx_receiver) = crossbeam_channel::bounded::<Vec<u8>>(256);
@@ -122,7 +123,7 @@ impl SlirpBackend {
         thread::Builder::new()
             .name("slirp-event-loop".into())
             .spawn(move || {
-                slirp_event_loop(tx_receiver, rx_sender, ctx_rx_event);
+                slirp_event_loop(tx_receiver, rx_sender, ctx_rx_event, port_forwards);
             })
             .expect("Failed to spawn slirp event loop thread");
 
@@ -302,6 +303,7 @@ fn slirp_event_loop(
     tx_receiver: Receiver<Vec<u8>>,
     rx_sender: Sender<Vec<u8>>,
     rx_event: SendableHandle,
+    port_forwards: Vec<(u16, u16)>,
 ) {
     use windows_sys::Win32::Networking::WinSock;
 
@@ -381,6 +383,27 @@ fn slirp_event_loop(
     }
 
     log::info!("Slirp network backend initialized (10.0.2.0/24)");
+
+    // Set up port forwarding rules
+    for (host_port, guest_port) in &port_forwards {
+        let host_addr = in_addr::from(std::net::Ipv4Addr::UNSPECIFIED); // 0.0.0.0
+        let guest_addr = in_addr::from(std::net::Ipv4Addr::new(10, 0, 2, 15));
+        let ret = unsafe {
+            slirp_add_hostfwd(
+                slirp,
+                0, // TCP
+                host_addr,
+                *host_port as c_int,
+                guest_addr,
+                *guest_port as c_int,
+            )
+        };
+        if ret == 0 {
+            log::info!("slirp hostfwd: TCP host:{} -> guest:{}", host_port, guest_port);
+        } else {
+            log::error!("slirp hostfwd failed: TCP host:{} -> guest:{}", host_port, guest_port);
+        }
+    }
 
     // Main event loop
     let mut pollfds: Vec<WinSock::WSAPOLLFD> = Vec::with_capacity(MAX_POLLFDS);

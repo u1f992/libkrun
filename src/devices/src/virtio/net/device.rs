@@ -75,7 +75,10 @@ pub enum VirtioNetBackend {
     Tap(String),
     /// In-process libslirp network backend (Windows)
     #[cfg(target_os = "windows")]
-    Slirp,
+    Slirp {
+        /// TCP port forwarding rules: (host_port, guest_port)
+        port_forwards: Vec<(u16, u16)>,
+    },
 }
 
 pub struct Net {
