@@ -243,18 +243,10 @@ impl SafeEmulator {
         if let Some(bus) = ctx.io_bus {
             if info.Direction == 0 {
                 // PIO IN (read from device)
-                let found = bus.read(ctx.vcpu_index as u64, port, data);
-                static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                if LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
-                    eprintln!("[WHPX] PIO IN  port=0x{:x} size={} data={:?} found={}", port, size, &data[..size], found);
-                }
+                bus.read(ctx.vcpu_index as u64, port, data);
             } else {
                 // PIO OUT (write to device)
-                let found = bus.write(ctx.vcpu_index as u64, port, data);
-                static LOGGED_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-                if LOGGED_W.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
-                    eprintln!("[WHPX] PIO OUT port=0x{:x} size={} data={:?} found={}", port, size, &data[..size], found);
-                }
+                bus.write(ctx.vcpu_index as u64, port, data);
             }
         } else {
             eprintln!("[WHPX] IO port 0x{:x} dir={} - NO IO BUS", port, info.Direction);
@@ -1069,13 +1061,14 @@ impl Vcpu {
         })
         .map_err(Error::RunVirtualProcessor)?;
 
-        eprintln!(
-            "[WHPX] vCPU {} exit reason: {} RIP=0x{:x} CS.sel=0x{:x}",
-            self.id,
-            self.exit_context.ExitReason,
-            self.exit_context.VpContext.Rip,
-            self.exit_context.VpContext.Cs.Selector,
-        );
+        // Only log non-IO/non-CPUID exits to reduce noise
+        let reason = self.exit_context.ExitReason;
+        if reason != 2 && reason != 4097 {
+            eprintln!(
+                "[WHPX] vCPU {} exit reason: {} RIP=0x{:x}",
+                self.id, reason, self.exit_context.VpContext.Rip,
+            );
+        }
         self.handle_exit()
     }
 
