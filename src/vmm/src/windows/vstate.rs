@@ -28,6 +28,30 @@ use windows_sys::Win32::System::Hypervisor::*;
 // HRESULT check macro -- converts non-S_OK HRESULT to Result<(), i32>.
 // ---------------------------------------------------------------------------
 
+/// Returns the host TSC frequency in Hz.
+/// Uses RDTSC calibration against QueryPerformanceCounter.
+fn get_tsc_frequency() -> u64 {
+    use std::sync::LazyLock;
+    static TSC_FREQ: LazyLock<u64> = LazyLock::new(|| {
+        // Try CPUID leaf 0x15 first (TSC/core crystal clock ratio)
+        let cpuid = unsafe { std::arch::x86_64::__cpuid(0x15) };
+        if cpuid.eax != 0 && cpuid.ebx != 0 && cpuid.ecx != 0 {
+            let freq = (cpuid.ecx as u64) * (cpuid.ebx as u64) / (cpuid.eax as u64);
+            if freq > 0 {
+                return freq;
+            }
+        }
+        // Fallback: use CPUID leaf 0x16 (processor frequency info) if available
+        let cpuid = unsafe { std::arch::x86_64::__cpuid(0x16) };
+        if cpuid.eax != 0 {
+            return cpuid.eax as u64 * 1_000_000; // MHz to Hz
+        }
+        // Last resort: assume 3.6 GHz (common for modern desktop CPUs)
+        3_600_000_000u64
+    });
+    *TSC_FREQ
+}
+
 macro_rules! check_whpx {
     ($expr:expr) => {{
         let hr: i32 = $expr;
@@ -1299,17 +1323,22 @@ impl Vcpu {
                 }
             }
         } else {
-            // Reads: return 0 for known MSRs, inject GP for unknown.
+            // Reads: return frequency values for known MSRs.
             match msr_number {
                 HV_X64_MSR_TSC_FREQUENCY => {
-                    // TODO: return actual TSC frequency.
-                    self.set_register(WHvX64RegisterRax, 0)?;
-                    self.set_register(WHvX64RegisterRdx, 0)?;
+                    // Return host TSC frequency. Use QueryPerformanceFrequency
+                    // as a proxy (same as crosvm's tsc::tsc_frequency approach).
+                    let tsc_freq = get_tsc_frequency();
+                    debug!("MSR read TSC_FREQUENCY -> {}", tsc_freq);
+                    self.set_register(WHvX64RegisterRax, tsc_freq & 0xFFFFFFFF)?;
+                    self.set_register(WHvX64RegisterRdx, tsc_freq >> 32)?;
                 }
                 HV_X64_MSR_APIC_FREQUENCY => {
-                    // TODO: return actual APIC bus frequency.
-                    self.set_register(WHvX64RegisterRax, 0)?;
-                    self.set_register(WHvX64RegisterRdx, 0)?;
+                    // Hyper-V default APIC bus frequency is 1 GHz.
+                    let apic_freq: u64 = 1_000_000_000;
+                    debug!("MSR read APIC_FREQUENCY -> {}", apic_freq);
+                    self.set_register(WHvX64RegisterRax, apic_freq & 0xFFFFFFFF)?;
+                    self.set_register(WHvX64RegisterRdx, apic_freq >> 32)?;
                 }
                 HV_X64_MSR_TSC_INVARIANT_CONTROL => {
                     self.set_register(WHvX64RegisterRax, 0)?;
