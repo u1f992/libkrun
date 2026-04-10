@@ -28,37 +28,52 @@ const IOAPIC_NUM_PINS: usize = 24;
 /// device asserts an IRQ line.
 pub struct WhpxIoapic {
     partition: WHV_PARTITION_HANDLE,
-    /// Simple mapping: pin → (vector, active). Populated by device registration.
-    pin_to_vector: [u8; IOAPIC_NUM_PINS],
     /// IOAPIC register select.
     ioregsel: u8,
-    /// Redirection table entries (simplified).
+    /// Redirection table entries.
+    /// Format per Intel IOAPIC spec: 64-bit per pin.
+    /// Bits 7:0 = vector, 10:8 = delivery mode, 11 = dest mode,
+    /// 15 = trigger mode, 16 = mask, 63:56 = destination.
     ioredtbl: [u64; IOAPIC_NUM_PINS],
 }
 
 impl WhpxIoapic {
     pub fn new(partition: WHV_PARTITION_HANDLE) -> Self {
-        let mut pin_to_vector = [0u8; IOAPIC_NUM_PINS];
-        // Default mapping: pin N → vector 16 + N (Linux default IRQ layout).
-        for i in 0..IOAPIC_NUM_PINS {
-            pin_to_vector[i] = (16 + i) as u8;
+        // All entries start masked (bit 16 = 1).
+        let mut ioredtbl = [0u64; IOAPIC_NUM_PINS];
+        for entry in &mut ioredtbl {
+            *entry = 1 << 16; // masked
         }
 
         WhpxIoapic {
             partition,
-            pin_to_vector,
             ioregsel: 0,
-            ioredtbl: [0u64; IOAPIC_NUM_PINS],
+            ioredtbl,
         }
     }
 
     /// Deliver an interrupt to the guest via WHPX.
-    fn deliver_interrupt(&self, vector: u8) {
-        let mut interrupt: WHV_INTERRUPT_CONTROL = unsafe { std::mem::zeroed() };
-        interrupt.Destination = 0; // BSP
-        interrupt.Vector = vector as u32;
-        // Type = Fixed (0), DestinationMode = Physical (0), TriggerMode = Edge (0)
-        // These are the defaults from zeroed memory.
+    /// Reads trigger mode, destination, and delivery mode from the redirection
+    /// table entry for the given pin.
+    fn deliver_interrupt(&self, pin: usize) {
+        let entry = self.ioredtbl[pin];
+        let vector = (entry & 0xFF) as u32;
+        let delivery_mode = ((entry >> 8) & 0x7) as u64;  // bits 10:8
+        let dest_mode = ((entry >> 11) & 0x1) as u64;      // bit 11 (0=physical, 1=logical)
+        let trigger_mode = ((entry >> 15) & 0x1) as u64;   // bit 15 (0=edge, 1=level)
+        let destination = ((entry >> 56) & 0xFF) as u32;    // bits 63:56
+
+        // WHV_INTERRUPT_CONTROL._bitfield layout:
+        // bits 0-3: Type (delivery mode: 0=Fixed, 1=Lowest, etc.)
+        // bit 4: DestinationMode (0=Physical, 1=Logical)
+        // bit 5: TriggerMode (0=Edge, 1=Level)
+        let bitfield: u64 = delivery_mode | (dest_mode << 4) | (trigger_mode << 5);
+
+        let interrupt = WHV_INTERRUPT_CONTROL {
+            _bitfield: bitfield,
+            Destination: destination,
+            Vector: vector,
+        };
 
         let result = unsafe {
             WHvRequestInterrupt(
@@ -70,9 +85,8 @@ impl WhpxIoapic {
 
         if result != 0 {
             log::warn!(
-                "WHvRequestInterrupt failed for vector {}: HRESULT 0x{:08X}",
-                vector,
-                result as u32
+                "WHvRequestInterrupt failed for pin {} vector {}: HRESULT 0x{:08X}",
+                pin, vector, result as u32
             );
         }
     }
@@ -130,8 +144,6 @@ impl BusDevice for WhpxIoapic {
                         self.ioredtbl[pin] =
                             (self.ioredtbl[pin] & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
                     }
-                    // Update pin-to-vector mapping from the low bits of the entry.
-                    self.pin_to_vector[pin] = (self.ioredtbl[pin] & 0xFF) as u8;
                 }
             }
             0x40 => {
@@ -161,11 +173,11 @@ impl IrqChipT for WhpxIoapic {
         if let Some(irq) = irq_line {
             let pin = irq as usize;
             if pin < IOAPIC_NUM_PINS {
-                let vector = self.pin_to_vector[pin];
-                // Check if masked (bit 16 of redirection table entry).
-                let masked = (self.ioredtbl[pin] >> 16) & 1 != 0;
+                let entry = self.ioredtbl[pin];
+                let vector = (entry & 0xFF) as u8;
+                let masked = (entry >> 16) & 1 != 0;
                 if !masked && vector != 0 {
-                    self.deliver_interrupt(vector);
+                    self.deliver_interrupt(pin);
                 }
             }
         }

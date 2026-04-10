@@ -1790,9 +1790,9 @@ fn attach_legacy_devices(
         .map_err(StartMicrovmError::Internal)?;
 
     if split_irqchip {
-        if let Some(intc) = intc {
+        if let Some(ref intc) = intc {
             mmio_device_manager
-                .register_mmio_ioapic(intc)
+                .register_mmio_ioapic(intc.clone())
                 .map_err(Error::RegisterMMIODevice)
                 .map_err(StartMicrovmError::Internal)?;
         }
