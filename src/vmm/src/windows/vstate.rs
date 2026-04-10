@@ -1270,8 +1270,10 @@ impl Vcpu {
         let access_info = unsafe { self.exit_context.Anonymous.MemoryAccess.AccessInfo };
         let is_write = (unsafe { access_info.AsUINT32 } & 1) != 0;
         static MMIO_LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        if MMIO_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
-            eprintln!("[WHPX] MMIO exit GPA=0x{:x} write={}", gpa, is_write);
+        let count = MMIO_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Log first 30 and every 100th after that
+        if count < 30 || count % 100 == 0 {
+            eprintln!("[WHPX] MMIO exit #{} GPA=0x{:x} write={}", count, gpa, is_write);
         }
         let mut ctx = EmulatorContext {
             partition: self.partition.partition,

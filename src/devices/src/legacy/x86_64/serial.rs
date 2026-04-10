@@ -258,7 +258,6 @@ impl BusDevice for Serial {
     }
 }
 
-#[cfg(unix)]
 impl Subscriber for Serial {
     /// Handle a read event (EPOLLIN) on the serial input fd.
     fn process(&mut self, event: &EpollEvent, _: &mut EventManager) {
@@ -274,7 +273,7 @@ impl Subscriber for Serial {
         }
 
         if let Some(input) = self.input.as_mut() {
-            if input.as_raw_fd() == source {
+            if input_pollable(input.as_ref()) == source {
                 let mut out = [0u8; 32];
                 match input.read(&mut out[..]) {
                     Ok(count) => {
@@ -293,10 +292,28 @@ impl Subscriber for Serial {
     /// If serial input is present, register the serial input FD as readable.
     fn interest_list(&self) -> Vec<EpollEvent> {
         match &self.input {
-            Some(input) => vec![EpollEvent::new(EventSet::IN, input.as_raw_fd() as u64)],
+            Some(input) => {
+                vec![EpollEvent::new(
+                    EventSet::IN,
+                    input_pollable(input.as_ref()) as u64,
+                )]
+            }
             None => vec![],
         }
     }
+}
+
+/// Returns the platform-agnostic pollable identifier for a ReadableFd.
+#[cfg(unix)]
+fn input_pollable(input: &dyn ReadableFd) -> polly::event_manager::Pollable {
+    use std::os::unix::io::AsRawFd;
+    input.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn input_pollable(input: &dyn ReadableFd) -> polly::event_manager::Pollable {
+    use std::os::windows::io::AsRawHandle;
+    input.as_raw_handle() as polly::event_manager::Pollable
 }
 
 #[cfg(test)]

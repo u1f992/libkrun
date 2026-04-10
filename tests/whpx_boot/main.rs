@@ -56,7 +56,7 @@ fn main() {
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0),
-        cmdline: Some("console=ttyS0 earlyprintk=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=1 irqpoll ip=dhcp".to_string()),
+        cmdline: Some("earlyprintk=ttyS0 console=hvc0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0 ip=dhcp".to_string()),
     };
     vm_resources.set_external_kernel(external_kernel);
 

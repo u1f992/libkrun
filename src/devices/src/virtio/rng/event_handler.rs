@@ -1,12 +1,25 @@
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
-#[cfg(unix)]
-use polly::event_manager::{EventManager, Subscriber};
+use polly::event_manager::{EventManager, Pollable, Subscriber};
 use utils::epoll::{EpollEvent, EventSet};
+use utils::eventfd::EventFd;
 
 use super::device::{Rng, REQ_INDEX};
 use crate::virtio::device::VirtioDevice;
+
+/// Returns the platform-agnostic pollable identifier for an EventFd.
+#[cfg(unix)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_handle() as Pollable
+}
 
 impl Rng {
     pub(crate) fn handle_req_event(&mut self, event: &EpollEvent) {
@@ -25,7 +38,6 @@ impl Rng {
         }
     }
 
-    #[cfg(unix)]
     fn handle_activate_event(&self, event_manager: &mut EventManager) {
         debug!("rng: activate event");
         if let Err(e) = self.activate_evt.read() {
@@ -35,13 +47,13 @@ impl Rng {
         // The subscriber must exist as we previously registered activate_evt via
         // `interest_list()`.
         let self_subscriber = event_manager
-            .subscriber(self.activate_evt.as_raw_fd())
+            .subscriber(eventfd_pollable(&self.activate_evt))
             .unwrap();
 
         event_manager
             .register(
-                self.queue_event(REQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(REQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(REQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(REQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -49,19 +61,18 @@ impl Rng {
             });
 
         event_manager
-            .unregister(self.activate_evt.as_raw_fd())
+            .unregister(eventfd_pollable(&self.activate_evt))
             .unwrap_or_else(|e| {
                 error!("Failed to unregister rng activate evt: {e:?}");
             })
     }
 }
 
-#[cfg(unix)]
 impl Subscriber for Rng {
     fn process(&mut self, event: &EpollEvent, event_manager: &mut EventManager) {
         let source = event.fd();
-        let req = self.queue_event(REQ_INDEX).as_raw_fd();
-        let activate_evt = self.activate_evt.as_raw_fd();
+        let req = eventfd_pollable(self.queue_event(REQ_INDEX));
+        let activate_evt = eventfd_pollable(&self.activate_evt);
 
         if self.is_activated() {
             match source {
@@ -79,7 +90,7 @@ impl Subscriber for Rng {
     fn interest_list(&self) -> Vec<EpollEvent> {
         vec![EpollEvent::new(
             EventSet::IN,
-            self.activate_evt.as_raw_fd() as u64,
+            eventfd_pollable(&self.activate_evt) as u64,
         )]
     }
 }

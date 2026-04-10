@@ -1722,7 +1722,6 @@ pub fn setup_serial_device(
         .map_err(StartMicrovmError::Internal)?;
     let has_input = input.is_some();
     let serial = Arc::new(Mutex::new(Serial::new(interrupt_evt, out, input)));
-    #[cfg(unix)]
     if has_input {
         if let Err(e) = event_manager.add_subscriber(serial.clone()) {
             // TODO: We just log this message, and immediately return Ok, instead of returning the
@@ -2363,7 +2362,6 @@ fn attach_console_devices(
 
     vmm.exit_observers.push(console.clone());
 
-    #[cfg(unix)]
     event_manager
         .add_subscriber(console.clone())
         .map_err(RegisterEvent)?;
@@ -2425,7 +2423,6 @@ fn attach_balloon_device(
 
     let balloon = Arc::new(Mutex::new(devices::virtio::Balloon::new().unwrap()));
 
-    #[cfg(unix)]
     event_manager
         .add_subscriber(balloon.clone())
         .map_err(RegisterEvent)?;
@@ -2466,7 +2463,6 @@ fn attach_rng_device(
 
     let rng = Arc::new(Mutex::new(devices::virtio::Rng::new().unwrap()));
 
-    #[cfg(unix)]
     event_manager
         .add_subscriber(rng.clone())
         .map_err(RegisterEvent)?;

@@ -1,12 +1,25 @@
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 
-#[cfg(unix)]
-use polly::event_manager::{EventManager, Subscriber};
+use polly::event_manager::{EventManager, Pollable, Subscriber};
 use utils::epoll::{EpollEvent, EventSet};
+use utils::eventfd::EventFd;
 
 use super::device::{Balloon, DFQ_INDEX, FRQ_INDEX, IFQ_INDEX, PHQ_INDEX, STQ_INDEX};
 use crate::virtio::device::VirtioDevice;
+
+/// Returns the platform-agnostic pollable identifier for an EventFd.
+#[cfg(unix)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_handle() as Pollable
+}
 
 impl Balloon {
     fn queue_event(&self, idx: usize) -> &std::sync::Arc<utils::eventfd::EventFd> {
@@ -85,7 +98,6 @@ impl Balloon {
         }
     }
 
-    #[cfg(unix)]
     fn handle_activate_event(&self, event_manager: &mut EventManager) {
         debug!("balloon: activate event");
         if let Err(e) = self.activate_evt.read() {
@@ -95,13 +107,13 @@ impl Balloon {
         // The subscriber must exist as we previously registered activate_evt via
         // `interest_list()`.
         let self_subscriber = event_manager
-            .subscriber(self.activate_evt.as_raw_fd())
+            .subscriber(eventfd_pollable(&self.activate_evt))
             .unwrap();
 
         event_manager
             .register(
-                self.queue_event(IFQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(IFQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(IFQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(IFQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -110,8 +122,8 @@ impl Balloon {
 
         event_manager
             .register(
-                self.queue_event(DFQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(DFQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(DFQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(DFQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -120,8 +132,8 @@ impl Balloon {
 
         event_manager
             .register(
-                self.queue_event(STQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(STQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(STQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(STQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -130,8 +142,8 @@ impl Balloon {
 
         event_manager
             .register(
-                self.queue_event(PHQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(PHQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(PHQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(PHQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -140,8 +152,8 @@ impl Balloon {
 
         event_manager
             .register(
-                self.queue_event(FRQ_INDEX).as_raw_fd(),
-                EpollEvent::new(EventSet::IN, self.queue_event(FRQ_INDEX).as_raw_fd() as u64),
+                eventfd_pollable(self.queue_event(FRQ_INDEX)),
+                EpollEvent::new(EventSet::IN, eventfd_pollable(self.queue_event(FRQ_INDEX)) as u64),
                 self_subscriber.clone(),
             )
             .unwrap_or_else(|e| {
@@ -149,23 +161,22 @@ impl Balloon {
             });
 
         event_manager
-            .unregister(self.activate_evt.as_raw_fd())
+            .unregister(eventfd_pollable(&self.activate_evt))
             .unwrap_or_else(|e| {
                 error!("Failed to unregister balloon activate evt: {e:?}");
             })
     }
 }
 
-#[cfg(unix)]
 impl Subscriber for Balloon {
     fn process(&mut self, event: &EpollEvent, event_manager: &mut EventManager) {
         let source = event.fd();
-        let ifq = self.queue_event(IFQ_INDEX).as_raw_fd();
-        let dfq = self.queue_event(DFQ_INDEX).as_raw_fd();
-        let stq = self.queue_event(STQ_INDEX).as_raw_fd();
-        let phq = self.queue_event(PHQ_INDEX).as_raw_fd();
-        let frq = self.queue_event(FRQ_INDEX).as_raw_fd();
-        let activate_evt = self.activate_evt.as_raw_fd();
+        let ifq = eventfd_pollable(self.queue_event(IFQ_INDEX));
+        let dfq = eventfd_pollable(self.queue_event(DFQ_INDEX));
+        let stq = eventfd_pollable(self.queue_event(STQ_INDEX));
+        let phq = eventfd_pollable(self.queue_event(PHQ_INDEX));
+        let frq = eventfd_pollable(self.queue_event(FRQ_INDEX));
+        let activate_evt = eventfd_pollable(&self.activate_evt);
 
         if self.is_activated() {
             match source {
@@ -187,7 +198,7 @@ impl Subscriber for Balloon {
     fn interest_list(&self) -> Vec<EpollEvent> {
         vec![EpollEvent::new(
             EventSet::IN,
-            self.activate_evt.as_raw_fd() as u64,
+            eventfd_pollable(&self.activate_evt) as u64,
         )]
     }
 }
