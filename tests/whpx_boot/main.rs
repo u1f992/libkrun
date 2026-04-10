@@ -70,7 +70,7 @@ fn main() {
     // Kernel cmdline: root on /dev/vda if disk provided, otherwise just serial console
     // Same cmdline for both disk and no-disk modes.
     // initrd handles rootfs switch when root= is in cmdline.
-    let mut cmdline = "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet nolapic noapic tsc=reliable lpj=7200000 8250.nr_uarts=1".to_string();
+    let mut cmdline = "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0".to_string();
     if disk_path.is_some() {
         // Don't add root= to kernel cmdline - let initrd handle rootfs mount
         // Pass it as a custom parameter that initrd's init script will parse
