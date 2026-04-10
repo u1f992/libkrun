@@ -398,7 +398,7 @@ pub fn configure_system(
     let himem_start = GuestAddress(layout::HIMEM_START);
 
     // Note that this puts the mptable at the last 1k of Linux's 640k base RAM
-    #[cfg(not(feature = "tee"))]
+    #[cfg(all(not(feature = "tee"), not(target_os = "windows")))]
     mptable::setup_mptable(guest_mem, num_cpus).map_err(Error::MpTableSetup)?;
 
     let mut params: BootParamsWrapper = BootParamsWrapper(boot_params::default());

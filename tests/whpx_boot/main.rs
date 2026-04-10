@@ -68,12 +68,14 @@ fn main() {
     let _ = vm_resources.set_vm_config(&vm_config);
 
     // Kernel cmdline: root on /dev/vda if disk provided, otherwise just serial console
-    let cmdline = if disk_path.is_some() {
-        // When disk is provided: boot directly from rootfs, no initrd needed
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0 root=/dev/vda rw rootwait".to_string()
-    } else {
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=0".to_string()
-    };
+    // Same cmdline for both disk and no-disk modes.
+    // initrd handles rootfs switch when root= is in cmdline.
+    let mut cmdline = "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet nolapic noapic tsc=reliable lpj=7200000 8250.nr_uarts=1".to_string();
+    if disk_path.is_some() {
+        // Don't add root= to kernel cmdline - let initrd handle rootfs mount
+        // Pass it as a custom parameter that initrd's init script will parse
+        cmdline.push_str(" krun_root=/dev/vda");
+    }
 
     // External kernel
     let format = if kernel_path.to_str().map_or(false, |s| s.contains("vmlinux")) {
@@ -81,21 +83,16 @@ fn main() {
     } else {
         KernelFormat::Raw
     };
-    // When --disk is provided, don't load initrd (boot directly from rootfs)
-    let use_initrd = disk_path.is_none();
+    // Always load initrd - it handles rootfs switch when disk is provided
     let external_kernel = ExternalKernel {
         path: kernel_path,
         format,
-        initramfs_path: if use_initrd { initrd_path.clone() } else { None },
-        initramfs_size: if use_initrd {
-            initrd_path
-                .as_ref()
-                .and_then(|p| std::fs::metadata(p).ok())
-                .map(|m| m.len())
-                .unwrap_or(0)
-        } else {
-            0
-        },
+        initramfs_path: initrd_path.clone(),
+        initramfs_size: initrd_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .unwrap_or(0),
         cmdline: Some(cmdline),
     };
     vm_resources.set_external_kernel(external_kernel);
