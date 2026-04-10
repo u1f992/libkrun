@@ -18,6 +18,8 @@ use super::VNET_HDR_LEN;
 use std::os::fd::RawFd;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+#[cfg(target_os = "windows")]
+use std::os::windows::io::AsRawHandle;
 use std::thread;
 use std::{cmp, result};
 use utils::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
@@ -113,9 +115,17 @@ impl NetWorker {
         #[cfg(target_os = "macos")]
         const TX_TIMER_FD: RawFd = -2;
 
+        #[cfg(unix)]
         let virtq_rx_ev_fd = self.rx_q.event.as_raw_fd();
+        #[cfg(unix)]
         let virtq_tx_ev_fd = self.tx_q.event.as_raw_fd();
+        #[cfg(target_os = "windows")]
+        let virtq_rx_ev_fd = self.rx_q.event.as_raw_handle() as usize;
+        #[cfg(target_os = "windows")]
+        let virtq_tx_ev_fd = self.tx_q.event.as_raw_handle() as usize;
         let backend_socket = self.backend.raw_socket_fd();
+        #[cfg(target_os = "windows")]
+        let backend_socket = backend_socket as usize;
 
         let epoll = Epoll::new().unwrap();
 

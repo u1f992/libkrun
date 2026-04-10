@@ -21,8 +21,33 @@ use std::ffi::c_void;
 use std::os::raw::c_int;
 use std::ptr;
 
+use windows_sys::Win32::Foundation::HANDLE;
+
 /// Maximum number of socket FDs we track for polling.
 const MAX_POLLFDS: usize = 256;
+
+/// Wrapper around a raw handle value (stored as usize) to allow Send.
+/// On Windows, RawHandle is *mut c_void which is not Send.
+/// We store the underlying value as usize and convert back when needed.
+#[derive(Clone, Copy)]
+struct SendableHandle(usize);
+
+// SAFETY: The handle is only used within the slirp thread after being moved there.
+unsafe impl Send for SendableHandle {}
+
+impl SendableHandle {
+    fn from_raw(h: RawHandle) -> Self {
+        SendableHandle(h as usize)
+    }
+
+    fn as_raw_handle(self) -> RawHandle {
+        self.0 as RawHandle
+    }
+
+    fn as_handle(self) -> HANDLE {
+        self.0 as HANDLE
+    }
+}
 
 /// Slirp network backend using in-process libslirp.
 ///
@@ -46,7 +71,7 @@ struct SlirpContext {
     /// Receive frames from guest to feed into slirp
     tx_receiver: Receiver<Vec<u8>>,
     /// Event handle to signal when a frame is available for guest RX
-    rx_event: RawHandle,
+    rx_event: SendableHandle,
     /// Timer storage: Vec of (id, expiry_ms) — simple polling-based timers
     timers: Vec<SlirpTimer>,
     /// Next timer ID
@@ -73,7 +98,7 @@ impl SlirpBackend {
         let (rx_sender, rx_receiver) = crossbeam_channel::bounded::<Vec<u8>>(256);
 
         // Create a Windows event for signaling RX availability.
-        let rx_event = unsafe {
+        let rx_event_handle: HANDLE = unsafe {
             windows_sys::Win32::System::Threading::CreateEventW(
                 ptr::null(),
                 0, // auto-reset
@@ -81,18 +106,19 @@ impl SlirpBackend {
                 ptr::null(),
             )
         };
-        if rx_event.is_null() {
+        if rx_event_handle == 0 {
             return Err(ConnectError::CreateSocket(
                 std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
             ));
         }
 
-        let ctx_rx_event = rx_event as usize; // usize is Send-safe
+        let rx_event = rx_event_handle as RawHandle;
+        let ctx_rx_event = SendableHandle::from_raw(rx_event);
 
         thread::Builder::new()
             .name("slirp-event-loop".into())
             .spawn(move || {
-                slirp_event_loop(tx_receiver, rx_sender, ctx_rx_event as RawHandle);
+                slirp_event_loop(tx_receiver, rx_sender, ctx_rx_event);
             })
             .expect("Failed to spawn slirp event loop thread");
 
@@ -187,7 +213,7 @@ unsafe extern "C" fn cb_send_packet(
     match ctx.rx_sender.try_send(frame) {
         Ok(()) => {
             // Signal the RX event so the worker thread wakes up
-            windows_sys::Win32::System::Threading::SetEvent(ctx.rx_event);
+            windows_sys::Win32::System::Threading::SetEvent(ctx.rx_event.as_handle());
             len as isize
         }
         Err(_) => {
@@ -204,7 +230,7 @@ unsafe extern "C" fn cb_guest_error(msg: *const i8, _opaque: *mut c_void) {
     }
 }
 
-unsafe extern "C" fn cb_clock_get_ns(opaque: *mut c_void) -> i64 {
+unsafe extern "C" fn cb_clock_get_ns(_opaque: *mut c_void) -> i64 {
     // Return monotonic time in nanoseconds
     use std::time::Instant;
     // We use a thread-local base instant for monotonic time
@@ -269,7 +295,7 @@ unsafe extern "C" fn cb_notify(_opaque: *mut c_void) {
 fn slirp_event_loop(
     tx_receiver: Receiver<Vec<u8>>,
     rx_sender: Sender<Vec<u8>>,
-    rx_event: RawHandle,
+    rx_event: SendableHandle,
 ) {
     use windows_sys::Win32::Networking::WinSock;
 
@@ -287,7 +313,7 @@ fn slirp_event_loop(
     let cfg = SlirpConfig {
         version: 4, // SLIRP_CONFIG_VERSION_MAX in libslirp 4.x
         restricted: 0,
-        in_enabled: 1, // true
+        in_enabled: true,
         vnetwork: in_addr {
             s_addr: u32::from_ne_bytes([10, 0, 2, 0]),
         },
@@ -297,7 +323,7 @@ fn slirp_event_loop(
         vhost: in_addr {
             s_addr: u32::from_ne_bytes([10, 0, 2, 2]),
         },
-        in6_enabled: 0,
+        in6_enabled: false,
         vprefix_addr6: in6_addr {
             s6_addr: [0; 16],
         },
@@ -305,10 +331,10 @@ fn slirp_event_loop(
         vhost6: in6_addr {
             s6_addr: [0; 16],
         },
-        vhostname: [0; 33],
-        tftp_server_name: [0; 33],
-        tftp_path: [0; 256], // Adjust size based on SlirpConfig definition
-        bootfile: [0; 256],
+        vhostname: ptr::null(),
+        tftp_server_name: ptr::null(),
+        tftp_path: ptr::null(),
+        bootfile: ptr::null(),
         vdhcp_start: in_addr {
             s_addr: u32::from_ne_bytes([10, 0, 2, 15]),
         },
@@ -319,15 +345,15 @@ fn slirp_event_loop(
             s6_addr: [0; 16],
         },
         vdnssearch: ptr::null_mut(),
-        vdomainname: [0; 256],
+        vdomainname: ptr::null(),
         if_mtu: 0,
         if_mru: 0,
-        disable_host_loopback: 0,
-        enable_emu: 0,
-        outbound_addr: ptr::null_mut(),
-        outbound_addr6: ptr::null_mut(),
-        disable_dns: 0,
-        disable_dhcp: 0,
+        disable_host_loopback: false,
+        enable_emu: false,
+        outbound_addr: ptr::null(),
+        outbound_addr6: ptr::null(),
+        disable_dns: false,
+        disable_dhcp: false,
     };
 
     let callbacks = SlirpCb {
@@ -395,14 +421,14 @@ fn slirp_event_loop(
         ) -> c_int {
             let pollfds = &mut *(opaque as *mut Vec<WinSock::WSAPOLLFD>);
             let mut wsa_events: i16 = 0;
-            if events & SLIRP_POLL_IN as c_int != 0 {
+            if events & SLIRP_POLL_IN != 0 {
                 wsa_events |= WinSock::POLLRDNORM;
             }
-            if events & SLIRP_POLL_OUT as c_int != 0 {
+            if events & SLIRP_POLL_OUT != 0 {
                 wsa_events |= WinSock::POLLWRNORM;
             }
             // SLIRP_POLL_PRI and SLIRP_POLL_HUP/ERR are handled automatically
-            if events & SLIRP_POLL_PRI as c_int != 0 {
+            if events & SLIRP_POLL_PRI != 0 {
                 wsa_events |= WinSock::POLLRDBAND;
             }
             let idx = pollfds.len();
@@ -449,19 +475,19 @@ fn slirp_event_loop(
             let pfd = &pollfds[idx as usize];
             let mut revents: c_int = 0;
             if pfd.revents & WinSock::POLLRDNORM != 0 {
-                revents |= SLIRP_POLL_IN as c_int;
+                revents |= SLIRP_POLL_IN;
             }
             if pfd.revents & WinSock::POLLWRNORM != 0 {
-                revents |= SLIRP_POLL_OUT as c_int;
+                revents |= SLIRP_POLL_OUT;
             }
             if pfd.revents & WinSock::POLLRDBAND != 0 {
-                revents |= SLIRP_POLL_PRI as c_int;
+                revents |= SLIRP_POLL_PRI;
             }
             if pfd.revents & WinSock::POLLERR != 0 {
-                revents |= SLIRP_POLL_ERR as c_int;
+                revents |= SLIRP_POLL_ERR;
             }
             if pfd.revents & WinSock::POLLHUP != 0 {
-                revents |= SLIRP_POLL_HUP as c_int;
+                revents |= SLIRP_POLL_HUP;
             }
             revents
         }
