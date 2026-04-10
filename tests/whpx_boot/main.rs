@@ -90,9 +90,17 @@ fn main() {
     {
         Ok(_vmm) => {
             println!("MicroVM built successfully! Running event loop...");
+            // Debug: how many subscribers registered?
+            eprintln!("[EVENT] EventManager has registrations");
+            let mut loop_count = 0u64;
             loop {
                 match event_manager.run_with_timeout(1000) {
-                    Ok(_) => {}
+                    Ok(n) => {
+                        loop_count += 1;
+                        if n > 0 {
+                            eprintln!("[EVENT] loop={} events={}", loop_count, n);
+                        }
+                    }
                     Err(e) => {
                         eprintln!("Event manager error: {:?}", e);
                         break;
