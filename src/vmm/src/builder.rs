@@ -1197,9 +1197,20 @@ fn load_external_kernel(
     external_kernel: &ExternalKernel,
 ) -> std::result::Result<(GuestAddress, Option<InitrdConfig>, Option<String>), StartMicrovmError> {
     let entry_addr = match external_kernel.format {
-        // Raw images are treated as bundled kernels on x86_64
+        // Raw/bzImage format on x86_64: use linux-loader's BzImage loader
         #[cfg(target_arch = "x86_64")]
-        KernelFormat::Raw => unreachable!(),
+        KernelFormat::Raw => {
+            let data: Vec<u8> = std::fs::read(external_kernel.path.clone())
+                .map_err(StartMicrovmError::RawOpenKernel)?;
+            let load_result = loader::BzImage::load(
+                guest_mem,
+                None,
+                &mut std::io::Cursor::new(data),
+                None,
+            )
+            .map_err(StartMicrovmError::ElfLoadKernel)?;
+            load_result.kernel_load
+        }
         #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
         KernelFormat::Raw => {
             let data: Vec<u8> = std::fs::read(external_kernel.path.clone())
