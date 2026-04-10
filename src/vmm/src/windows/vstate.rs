@@ -1271,9 +1271,10 @@ impl Vcpu {
         let is_write = (unsafe { access_info.AsUINT32 } & 1) != 0;
         static MMIO_LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let count = MMIO_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // Log first 30 and every 100th after that
-        if count < 30 || count % 100 == 0 {
-            eprintln!("[WHPX] MMIO exit #{} GPA=0x{:x} write={}", count, gpa, is_write);
+        // Log first 50 and every 50th after
+        if count < 50 || count % 50 == 0 {
+            eprintln!("[WHPX] MMIO #{} GPA=0x{:x} write={} RIP=0x{:x}",
+                count, gpa, is_write, self.exit_context.VpContext.Rip);
         }
         let mut ctx = EmulatorContext {
             partition: self.partition.partition,
