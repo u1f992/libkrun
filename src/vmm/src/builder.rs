@@ -2044,7 +2044,7 @@ fn attach_mmio_device(
         vmm.mmio_device_manager
             .register_mmio_device(mmio_device, type_id, id)?;
 
-    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    #[cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))]
     vmm.mmio_device_manager
         .add_device_to_cmdline(_cmdline, _mmio_base, _irq)?;
 

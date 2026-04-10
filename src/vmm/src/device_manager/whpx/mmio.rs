@@ -139,6 +139,21 @@ impl MMIODeviceManager {
         Ok(())
     }
 
+    /// Append virtio_mmio.device kernel parameter for a registered device.
+    pub fn add_device_to_cmdline(
+        &mut self,
+        cmdline: &mut kernel_cmdline::Cmdline,
+        mmio_base: u64,
+        irq: u32,
+    ) -> Result<()> {
+        cmdline
+            .insert(
+                "virtio_mmio.device",
+                &format!("{}K@0x{:08x}:{}", MMIO_LEN / 1024, mmio_base, irq),
+            )
+            .map_err(Error::Cmdline)
+    }
+
     /// Gets the specified device.
     pub fn get_device(
         &self,
