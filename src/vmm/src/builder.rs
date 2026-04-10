@@ -891,9 +891,10 @@ pub fn build_microvm(
         );
         intc = Arc::new(Mutex::new(IrqChipDevice::new(ioapic)));
 
+        // WHPX has no in-kernel IRQ chip, so split_irqchip is always required.
         attach_legacy_devices(
             &vm,
-            vm_resources.split_irqchip,
+            true, // always split on Windows (WHPX has no in-kernel IRQ chip)
             &mut pio_device_manager,
             &mut mmio_device_manager,
             Some(intc.clone()),

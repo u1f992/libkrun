@@ -28,28 +28,48 @@ use windows_sys::Win32::System::Hypervisor::*;
 // HRESULT check macro -- converts non-S_OK HRESULT to Result<(), i32>.
 // ---------------------------------------------------------------------------
 
-/// Returns the host TSC frequency in Hz.
-/// Uses RDTSC calibration against QueryPerformanceCounter.
+/// Returns the host TSC frequency in Hz from WHPX capabilities.
 fn get_tsc_frequency() -> u64 {
     use std::sync::LazyLock;
     static TSC_FREQ: LazyLock<u64> = LazyLock::new(|| {
-        // Try CPUID leaf 0x15 first (TSC/core crystal clock ratio)
-        let cpuid = unsafe { std::arch::x86_64::__cpuid(0x15) };
-        if cpuid.eax != 0 && cpuid.ebx != 0 && cpuid.ecx != 0 {
-            let freq = (cpuid.ecx as u64) * (cpuid.ebx as u64) / (cpuid.eax as u64);
-            if freq > 0 {
-                return freq;
-            }
+        let mut cap: WHV_CAPABILITY = unsafe { std::mem::zeroed() };
+        let hr = unsafe {
+            WHvGetCapability(
+                4100, // WHvCapabilityCodeProcessorClockFrequency
+                &mut cap as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<WHV_CAPABILITY>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if hr == 0 {
+            unsafe { cap.ProcessorClockFrequency }
+        } else {
+            3_600_000_000u64
         }
-        // Fallback: use CPUID leaf 0x16 (processor frequency info) if available
-        let cpuid = unsafe { std::arch::x86_64::__cpuid(0x16) };
-        if cpuid.eax != 0 {
-            return cpuid.eax as u64 * 1_000_000; // MHz to Hz
-        }
-        // Last resort: assume 3.6 GHz (common for modern desktop CPUs)
-        3_600_000_000u64
     });
     *TSC_FREQ
+}
+
+/// Returns the APIC/interrupt clock frequency in Hz from WHPX capabilities.
+fn get_apic_frequency() -> u64 {
+    use std::sync::LazyLock;
+    static FREQ: LazyLock<u64> = LazyLock::new(|| {
+        let mut cap: WHV_CAPABILITY = unsafe { std::mem::zeroed() };
+        let hr = unsafe {
+            WHvGetCapability(
+                4101, // WHvCapabilityCodeInterruptClockFrequency
+                &mut cap as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<WHV_CAPABILITY>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if hr == 0 {
+            unsafe { cap.InterruptClockFrequency }
+        } else {
+            1_000_000_000u64
+        }
+    });
+    *FREQ
 }
 
 macro_rules! check_whpx {
@@ -291,7 +311,11 @@ impl SafeEmulator {
         if let Some(bus) = ctx.mmio_bus {
             if info.Direction == 0 {
                 // MMIO read
-                bus.read(ctx.vcpu_index as u64, gpa, data);
+                let found = bus.read(ctx.vcpu_index as u64, gpa, data);
+                static ML: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if ML.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 20 {
+                    eprintln!("[WHPX] MMIO read  GPA=0x{:x} size={} found={} data={:?}", gpa, size, found, &data[..size]);
+                }
             } else {
                 // MMIO write
                 bus.write(ctx.vcpu_index as u64, gpa, data);
@@ -407,10 +431,42 @@ impl Vm {
         //
         // These tell a Linux guest that it is running under Hyper-V and which
         // features the synthetic hypervisor interface provides.
-        // Get host CPUID 0x15 for TSC frequency info
-        let host_cpuid_15 = unsafe { std::arch::x86_64::__cpuid(0x15) };
-        // Get host CPUID 0x16 for processor base frequency
-        let host_cpuid_16 = unsafe { std::arch::x86_64::__cpuid(0x16) };
+        // Get TSC/interrupt clock frequencies from WHPX capabilities.
+        // These are more reliable than CPUID 0x15/0x16 which may be unsupported.
+        let tsc_freq = {
+            let mut cap: WHV_CAPABILITY = unsafe { zeroed() };
+            let hr = unsafe {
+                WHvGetCapability(
+                    4100, // WHvCapabilityCodeProcessorClockFrequency
+                    &mut cap as *mut _ as *mut std::ffi::c_void,
+                    size_of::<WHV_CAPABILITY>() as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if hr == 0 { unsafe { cap.ProcessorClockFrequency } } else { 3_600_000_000u64 }
+        };
+        let apic_freq = {
+            let mut cap: WHV_CAPABILITY = unsafe { zeroed() };
+            let hr = unsafe {
+                WHvGetCapability(
+                    4101, // WHvCapabilityCodeInterruptClockFrequency
+                    &mut cap as *mut _ as *mut std::ffi::c_void,
+                    size_of::<WHV_CAPABILITY>() as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if hr == 0 { unsafe { cap.InterruptClockFrequency } } else { 1_000_000_000u64 }
+        };
+        debug!("WHPX TSC frequency: {} Hz, Interrupt clock: {} Hz", tsc_freq, apic_freq);
+
+        // Synthesize CPUID 0x15 (TSC/crystal ratio) from WHPX frequencies.
+        // Use a 25 MHz reference crystal (standard for modern Intel CPUs).
+        let crystal_freq: u32 = 25_000_000;
+        let tsc_ratio_denom: u32 = 1;
+        let tsc_ratio_numer: u32 = (tsc_freq / crystal_freq as u64) as u32;
+
+        // Synthesize CPUID 0x16 (frequency in MHz).
+        let base_mhz: u32 = (tsc_freq / 1_000_000) as u32;
 
         let cpuid_results: [WHV_X64_CPUID_RESULT; 4] = [
             // Leaf 0x40000000 -- vendor string "Microsoft Hv"
@@ -433,23 +489,23 @@ impl Vm {
                 Ecx: 0,
                 Edx: HV_FEATURE_FREQUENCY_MSRS_AVAILABLE,
             },
-            // Leaf 0x15 -- TSC/core crystal clock ratio (pass through host values)
+            // Leaf 0x15 -- TSC/core crystal clock ratio (synthesized from WHPX caps)
             WHV_X64_CPUID_RESULT {
                 Function: 0x15,
                 Reserved: [0u32; 3],
-                Eax: host_cpuid_15.eax,
-                Ebx: host_cpuid_15.ebx,
-                Ecx: host_cpuid_15.ecx,
-                Edx: host_cpuid_15.edx,
+                Eax: tsc_ratio_denom,  // denominator
+                Ebx: tsc_ratio_numer,  // numerator
+                Ecx: crystal_freq,     // crystal clock frequency in Hz
+                Edx: 0,
             },
-            // Leaf 0x16 -- Processor frequency information (pass through host values)
+            // Leaf 0x16 -- Processor frequency information (synthesized from WHPX caps)
             WHV_X64_CPUID_RESULT {
                 Function: 0x16,
                 Reserved: [0u32; 3],
-                Eax: host_cpuid_16.eax, // Base frequency in MHz
-                Ebx: host_cpuid_16.ebx, // Max frequency in MHz
-                Ecx: host_cpuid_16.ecx, // Bus/ref frequency in MHz
-                Edx: host_cpuid_16.edx,
+                Eax: base_mhz,    // Base frequency in MHz
+                Ebx: base_mhz,    // Max frequency in MHz
+                Ecx: 100,         // Bus/ref frequency in MHz
+                Edx: 0,
             },
         ];
         // Safety: we own this partition; the results array is stack-local.
@@ -466,7 +522,10 @@ impl Vm {
         // -- Set CPUID exit list --
         // Leaves whose results depend on per-vCPU state (topology, etc.)
         // need to be intercepted so we can adjust them.
-        let cpuid_exit_list: [u32; 5] = [0x1, 0x4, 0xB, 0x1F, 0x15];
+        // Leaves that need per-vCPU adjustment at runtime.
+        // Note: 0x15 and 0x16 are NOT in this list because they are pre-set
+        // via CpuidResultList with host values for TSC/frequency info.
+        let cpuid_exit_list: [u32; 4] = [0x1, 0x4, 0xB, 0x1F];
         // Safety: we own this partition; the array is stack-local.
         check_whpx!(unsafe {
             WHvSetPartitionProperty(
@@ -1207,6 +1266,13 @@ impl Vcpu {
 
     /// Handle MMIO exit via the WHPX instruction emulator.
     fn handle_mmio_exit(&mut self) -> Result<()> {
+        let gpa = unsafe { self.exit_context.Anonymous.MemoryAccess.Gpa };
+        let access_info = unsafe { self.exit_context.Anonymous.MemoryAccess.AccessInfo };
+        let is_write = (unsafe { access_info.AsUINT32 } & 1) != 0;
+        static MMIO_LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if MMIO_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
+            eprintln!("[WHPX] MMIO exit GPA=0x{:x} write={}", gpa, is_write);
+        }
         let mut ctx = EmulatorContext {
             partition: self.partition.partition,
             vcpu_index: self.whpx_index,
@@ -1357,8 +1423,7 @@ impl Vcpu {
                     self.set_register(WHvX64RegisterRdx, tsc_freq >> 32)?;
                 }
                 HV_X64_MSR_APIC_FREQUENCY => {
-                    // Hyper-V default APIC bus frequency is 1 GHz.
-                    let apic_freq: u64 = 1_000_000_000;
+                    let apic_freq: u64 = get_apic_frequency();
                     debug!("MSR read APIC_FREQUENCY -> {}", apic_freq);
                     self.set_register(WHvX64RegisterRax, apic_freq & 0xFFFFFFFF)?;
                     self.set_register(WHvX64RegisterRdx, apic_freq >> 32)?;
