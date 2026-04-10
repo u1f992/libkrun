@@ -56,7 +56,7 @@ fn main() {
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .unwrap_or(0),
-        cmdline: Some("console=hvc0 earlyprintk=ttyS0 reboot=t panic=-1".to_string()),
+        cmdline: Some("console=ttyS0 earlyprintk=ttyS0 reboot=t panic=-1 tsc=reliable lpj=7200000 nohpet lapic".to_string()),
     };
     vm_resources.set_external_kernel(external_kernel);
 

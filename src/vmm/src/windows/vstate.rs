@@ -407,7 +407,12 @@ impl Vm {
         //
         // These tell a Linux guest that it is running under Hyper-V and which
         // features the synthetic hypervisor interface provides.
-        let cpuid_results: [WHV_X64_CPUID_RESULT; 2] = [
+        // Get host CPUID 0x15 for TSC frequency info
+        let host_cpuid_15 = unsafe { std::arch::x86_64::__cpuid(0x15) };
+        // Get host CPUID 0x16 for processor base frequency
+        let host_cpuid_16 = unsafe { std::arch::x86_64::__cpuid(0x16) };
+
+        let cpuid_results: [WHV_X64_CPUID_RESULT; 4] = [
             // Leaf 0x40000000 -- vendor string "Microsoft Hv"
             WHV_X64_CPUID_RESULT {
                 Function: HYPERV_CPUID_VENDOR_AND_MAX_FUNCTIONS,
@@ -427,6 +432,24 @@ impl Vm {
                 Ebx: 0,
                 Ecx: 0,
                 Edx: HV_FEATURE_FREQUENCY_MSRS_AVAILABLE,
+            },
+            // Leaf 0x15 -- TSC/core crystal clock ratio (pass through host values)
+            WHV_X64_CPUID_RESULT {
+                Function: 0x15,
+                Reserved: [0u32; 3],
+                Eax: host_cpuid_15.eax,
+                Ebx: host_cpuid_15.ebx,
+                Ecx: host_cpuid_15.ecx,
+                Edx: host_cpuid_15.edx,
+            },
+            // Leaf 0x16 -- Processor frequency information (pass through host values)
+            WHV_X64_CPUID_RESULT {
+                Function: 0x16,
+                Reserved: [0u32; 3],
+                Eax: host_cpuid_16.eax, // Base frequency in MHz
+                Ebx: host_cpuid_16.ebx, // Max frequency in MHz
+                Ecx: host_cpuid_16.ecx, // Bus/ref frequency in MHz
+                Edx: host_cpuid_16.edx,
             },
         ];
         // Safety: we own this partition; the results array is stack-local.
