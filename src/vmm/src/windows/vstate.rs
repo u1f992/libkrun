@@ -1056,8 +1056,11 @@ impl Vcpu {
         .map_err(Error::RunVirtualProcessor)?;
 
         eprintln!(
-            "[WHPX] vCPU {} exit reason: {}",
-            self.id, self.exit_context.ExitReason
+            "[WHPX] vCPU {} exit reason: {} RIP=0x{:x} CS.sel=0x{:x}",
+            self.id,
+            self.exit_context.ExitReason,
+            self.exit_context.VpContext.Rip,
+            self.exit_context.VpContext.Cs.Selector,
         );
         self.handle_exit()
     }

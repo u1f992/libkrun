@@ -42,9 +42,14 @@ fn main() {
     vm_resources.set_vm_config(&vm_config);
 
     // Set external kernel
+    let format = if kernel_path.to_str().map_or(false, |s| s.contains("vmlinux")) {
+        KernelFormat::Elf
+    } else {
+        KernelFormat::Raw
+    };
     let external_kernel = ExternalKernel {
         path: kernel_path,
-        format: KernelFormat::Raw,
+        format,
         initramfs_path: initrd_path.clone(),
         initramfs_size: initrd_path
             .as_ref()
