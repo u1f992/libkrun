@@ -69,9 +69,9 @@ fn main() {
 
     // Kernel cmdline: root on /dev/vda if disk provided, otherwise just serial console
     let cmdline = if disk_path.is_some() {
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=1 root=/dev/vda rw".to_string()
+        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet noapic 8250.nr_uarts=0 root=/dev/vda rw".to_string()
     } else {
-        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet lapic 8250.nr_uarts=1".to_string()
+        "earlyprintk=ttyS0 console=ttyS0 reboot=t panic=-1 nohpet noapic 8250.nr_uarts=0".to_string()
     };
 
     // External kernel
