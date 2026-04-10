@@ -5,13 +5,28 @@ use super::device::{CacheType, DiskProperties};
 
 use crate::virtio::InterruptTransport;
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::result;
 use std::thread;
+use polly::event_manager::Pollable;
 use utils::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use utils::eventfd::EventFd;
 use virtio_bindings::virtio_blk::*;
 use vm_memory::{ByteValued, GuestMemoryMmap};
+
+/// Returns the platform-agnostic pollable identifier for an EventFd.
+#[cfg(unix)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn eventfd_pollable(efd: &EventFd) -> Pollable {
+    efd.as_raw_handle() as Pollable
+}
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -88,8 +103,8 @@ impl BlockWorker {
     }
 
     fn work(mut self) {
-        let virtq_ev_fd = self.device_queue.event.as_raw_fd();
-        let stop_ev_fd = self.stop_fd.as_raw_fd();
+        let virtq_ev_fd = eventfd_pollable(&self.device_queue.event);
+        let stop_ev_fd = eventfd_pollable(&self.stop_fd);
 
         let epoll = Epoll::new().unwrap();
 
