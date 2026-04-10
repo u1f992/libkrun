@@ -330,6 +330,7 @@ impl MmioTransport {
     #[allow(unused_assignments)]
     fn set_device_status(&mut self, status: u32) {
         use device_status::*;
+        eprintln!("[virtio-mmio] StatusWrite: new=0x{:x} cur=0x{:x} changed=0x{:x}", status, self.device_status, !self.device_status & status);
         // match changed bits
         match !self.device_status & status {
             ACKNOWLEDGE if self.device_status == INIT => {
@@ -345,7 +346,9 @@ impl MmioTransport {
                 self.device_status = status;
                 let device_activated = self.locked_device().is_activated();
                 if !device_activated {
+                    eprintln!("[virtio-mmio] DRIVER_OK (status=0x{:x}): activating device", self.device_status);
                     self.activate();
+                    eprintln!("[virtio-mmio] device activated successfully");
                 }
             }
             _ if (status & FAILED) != 0 => {
