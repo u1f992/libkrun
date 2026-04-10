@@ -174,6 +174,7 @@ impl NetBackend for SlirpBackend {
 
         // Strip virtio_net_hdr, send raw ethernet frame
         let frame = buf[hdr_len..].to_vec();
+        log::info!("SlirpBackend: TX frame {} bytes", frame.len());
 
         match self.tx_sender.try_send(frame) {
             Ok(()) => Ok(()),
@@ -213,6 +214,7 @@ unsafe extern "C" fn cb_send_packet(
     let ctx = &*(opaque as *const SlirpContext);
     let slice = std::slice::from_raw_parts(buf as *const u8, len);
     let frame = slice.to_vec();
+    log::info!("slirp cb_send_packet: {} bytes to guest", len);
 
     match ctx.rx_sender.try_send(frame) {
         Ok(()) => {
@@ -386,6 +388,7 @@ fn slirp_event_loop(
     loop {
         // 1. Drain guest TX frames and feed them to slirp
         while let Ok(frame) = ctx.tx_receiver.try_recv() {
+            log::info!("slirp_event_loop: feeding {} bytes to slirp", frame.len());
             unsafe {
                 slirp_input(slirp, frame.as_ptr(), frame.len() as c_int);
             }
