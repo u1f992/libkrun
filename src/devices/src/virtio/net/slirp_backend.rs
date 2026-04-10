@@ -61,8 +61,11 @@ pub struct SlirpBackend {
     /// Pending received frame (partially consumed)
     pending_rx: Option<Vec<u8>>,
     /// Event handle to signal when RX data is available (for epoll/IOCP integration)
-    rx_event: RawHandle,
+    rx_event: SendableHandle,
 }
+
+// Safety: All fields are Send (channels are Send, SendableHandle wraps usize).
+unsafe impl Send for SlirpBackend {}
 
 /// Context passed through libslirp's opaque pointer to callbacks.
 struct SlirpContext {
@@ -106,14 +109,15 @@ impl SlirpBackend {
                 ptr::null(),
             )
         };
-        if rx_event_handle == 0 {
+        if rx_event_handle.is_null() {
             return Err(ConnectError::CreateSocket(
                 std::io::Error::last_os_error().raw_os_error().unwrap_or(-1),
             ));
         }
 
-        let rx_event = rx_event_handle as RawHandle;
-        let ctx_rx_event = SendableHandle::from_raw(rx_event);
+        let rx_event_raw = rx_event_handle as RawHandle;
+        let ctx_rx_event = SendableHandle::from_raw(rx_event_raw);
+        let backend_rx_event = SendableHandle::from_raw(rx_event_raw);
 
         thread::Builder::new()
             .name("slirp-event-loop".into())
@@ -126,7 +130,7 @@ impl SlirpBackend {
             tx_sender,
             rx_receiver,
             pending_rx: None,
-            rx_event,
+            rx_event: backend_rx_event,
         })
     }
 }
@@ -193,7 +197,7 @@ impl NetBackend for SlirpBackend {
     }
 
     fn raw_socket_fd(&self) -> RawHandle {
-        self.rx_event
+        self.rx_event.as_raw_handle()
     }
 }
 
