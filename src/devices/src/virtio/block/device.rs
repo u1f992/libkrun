@@ -108,14 +108,21 @@ impl DiskProperties {
 
     fn build_device_id(disk_file: &File) -> result::Result<String, Error> {
         let blk_metadata = disk_file.metadata().map_err(Error::GetFileMetadata)?;
-        // This is how kvmtool does it.
-        let device_id = format!(
-            "{}{}{}",
-            blk_metadata.st_dev(),
-            blk_metadata.st_rdev(),
-            blk_metadata.st_ino()
-        );
-        Ok(device_id)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Ok(format!(
+                "{}{}{}",
+                blk_metadata.st_dev(),
+                blk_metadata.st_rdev(),
+                blk_metadata.st_ino()
+            ))
+        }
+        #[cfg(windows)]
+        {
+            // Windows doesn't have st_dev/st_rdev/st_ino. Use file size as unique-ish ID.
+            Ok(format!("blk{}", blk_metadata.len()))
+        }
     }
 
     fn build_disk_image_id(disk_file: &File) -> Vec<u8> {
