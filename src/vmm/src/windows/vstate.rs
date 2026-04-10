@@ -918,7 +918,7 @@ impl Vcpu {
             Base: seg_base(code_entry),
             Limit: seg_limit(code_entry),
             Selector: 8,
-            Attributes: seg_attributes(code_entry),
+            Anonymous: WHV_X64_SEGMENT_REGISTER_0 { Attributes: seg_attributes(code_entry) },
         };
 
         // DS/ES/FS/GS/SS: data segment from gdt[2], selector = 2*8 = 16
@@ -927,7 +927,7 @@ impl Vcpu {
             Base: seg_base(data_entry),
             Limit: seg_limit(data_entry),
             Selector: 16,
-            Attributes: seg_attributes(data_entry),
+            Anonymous: WHV_X64_SEGMENT_REGISTER_0 { Attributes: seg_attributes(data_entry) },
         };
         reg_values[10].Segment = data_seg; // DS
         reg_values[11].Segment = data_seg; // ES
@@ -941,7 +941,7 @@ impl Vcpu {
             Base: seg_base(tss_entry),
             Limit: seg_limit(tss_entry),
             Selector: 24,
-            Attributes: seg_attributes(tss_entry),
+            Anonymous: WHV_X64_SEGMENT_REGISTER_0 { Attributes: seg_attributes(tss_entry) },
         };
 
         // GDTR: base = GDT_START, limit = (4 entries * 8 bytes) - 1 = 31
@@ -1025,6 +1025,7 @@ impl Vcpu {
     /// - dispatch the exit reason
     /// - loop until halt / error
     fn run(&mut self) {
+        eprintln!("[WHPX] vCPU {} run loop starting", self.id);
         loop {
             match self.run_emulation() {
                 Ok(VcpuEmulation::Handled) => {}
@@ -1054,8 +1055,8 @@ impl Vcpu {
         })
         .map_err(Error::RunVirtualProcessor)?;
 
-        debug!(
-            "WHPX vCPU {} exit reason: {}",
+        eprintln!(
+            "[WHPX] vCPU {} exit reason: {}",
             self.id, self.exit_context.ExitReason
         );
         self.handle_exit()

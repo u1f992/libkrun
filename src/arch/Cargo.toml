@@ -18,8 +18,10 @@ utils = { path = "../utils" }
 
 [target.'cfg(unix)'.dependencies]
 libc = ">=0.2.39"
-vmm-sys-util = "0.14"
 smbios = { path = "../smbios" }
+
+[target.'cfg(any(unix, target_os = "windows"))'.dependencies]
+vmm-sys-util = "0.14"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 kvm-bindings = { version = "0.12", features = ["fam-wrappers"] }

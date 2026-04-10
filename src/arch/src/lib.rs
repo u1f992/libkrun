@@ -53,11 +53,8 @@ pub use crate::x86_64::{
     layout::IRQ_MAX, layout::MMIO_MEM_START, layout::RESET_VECTOR, Error,
 };
 
-#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+#[cfg(all(target_arch = "x86_64", any(target_os = "linux", target_os = "windows")))]
 pub use crate::x86_64::{arch_memory_regions, configure_system};
-
-#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
-pub use crate::x86_64::arch_memory_regions;
 
 /// Type for returning public functions outcome.
 pub type Result<T> = result::Result<T, Error>;

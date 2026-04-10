@@ -23,21 +23,21 @@ pub mod regs;
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::x86_64::layout::{FIRST_ADDR_PAST_32BITS, MMIO_MEM_START};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::x86_64::layout::EBDA_START;
 #[cfg(all(target_os = "linux", feature = "tee"))]
 use crate::x86_64::layout::{FIRMWARE_SIZE, FIRMWARE_START};
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::ArchMemoryInfo;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::InitrdConfig;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use arch_gen::x86::bootparam::{boot_params, E820_RAM};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use vm_memory::Bytes;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use vm_memory::GuestAddress;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 use vm_memory::{Address, ByteValued, GuestMemoryMmap};
 #[cfg(target_os = "linux")]
 use vmm_sys_util::align_upwards;
@@ -47,12 +47,12 @@ use vmm_sys_util::align_upwards;
 // *    the type that is implementing the trait is foreign or
 // *    all of the parameters being passed to the trait (if there are any) are also foreign
 // is prohibited.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Copy, Clone, Default)]
 struct BootParamsWrapper(boot_params);
 
 // It is safe to initialize BootParamsWrap which is a wrapper over `boot_params` (a series of ints).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 unsafe impl ByteValued for BootParamsWrapper {}
 
 /// Errors thrown while configuring x86_64 system.
@@ -378,7 +378,7 @@ pub fn arch_memory_regions(
 /// * `cmdline_size` - Size of the kernel command line in bytes including the null terminator.
 /// * `initrd` - Information about where the ramdisk image was loaded in the `guest_mem`.
 /// * `num_cpus` - Number of virtual CPUs the guest will have.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 #[allow(unused_variables)]
 pub fn configure_system(
     guest_mem: &GuestMemoryMmap,
@@ -398,7 +398,7 @@ pub fn configure_system(
     let himem_start = GuestAddress(layout::HIMEM_START);
 
     // Note that this puts the mptable at the last 1k of Linux's 640k base RAM
-    #[cfg(not(feature = "tee"))]
+    #[cfg(all(target_os = "linux", not(feature = "tee")))]
     mptable::setup_mptable(guest_mem, num_cpus).map_err(Error::MpTableSetup)?;
 
     let mut params: BootParamsWrapper = BootParamsWrapper(boot_params::default());
@@ -471,7 +471,7 @@ pub fn configure_system(
 
 /// Add an e820 region to the e820 map.
 /// Returns Ok(()) if successful, or an error if there is no space left in the map.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn add_e820_entry(
     params: &mut boot_params,
     addr: u64,
